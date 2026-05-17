@@ -170,6 +170,7 @@ fn build_dimensions(input: &BillingUsageInput) -> BTreeMap<String, Value> {
             "request_count".to_string(),
             json!(input.request_count.max(0)),
         ),
+        ("image_count".to_string(), json!(input.image_count.max(0))),
         (
             "total_input_context".to_string(),
             json!(total_input_context),
@@ -256,6 +257,7 @@ mod tests {
                     cache_creation_ephemeral_5m_tokens: 0,
                     cache_creation_ephemeral_1h_tokens: 0,
                     cache_read_tokens: 100,
+                    image_count: 0,
                     cache_ttl_minutes: Some(60),
                 },
             )
@@ -282,6 +284,7 @@ mod tests {
                     cache_creation_ephemeral_5m_tokens: 0,
                     cache_creation_ephemeral_1h_tokens: 0,
                     cache_read_tokens: 800,
+                    image_count: 0,
                     cache_ttl_minutes: Some(60),
                 },
             )
@@ -351,6 +354,7 @@ mod tests {
                     cache_creation_ephemeral_5m_tokens: 0,
                     cache_creation_ephemeral_1h_tokens: 0,
                     cache_read_tokens: 100,
+                    image_count: 0,
                     cache_ttl_minutes: Some(5),
                 },
             )
@@ -420,6 +424,7 @@ mod tests {
                     cache_creation_ephemeral_5m_tokens: 0,
                     cache_creation_ephemeral_1h_tokens: 0,
                     cache_read_tokens: 100,
+                    image_count: 0,
                     cache_ttl_minutes: Some(60),
                 },
             )

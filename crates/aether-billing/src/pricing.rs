@@ -147,6 +147,7 @@ pub struct BillingUsageInput {
     pub cache_creation_ephemeral_5m_tokens: i64,
     pub cache_creation_ephemeral_1h_tokens: i64,
     pub cache_read_tokens: i64,
+    pub image_count: i64,
     pub cache_ttl_minutes: Option<i64>,
 }
 
@@ -162,6 +163,7 @@ impl BillingUsageInput {
             cache_creation_ephemeral_5m_tokens: 0,
             cache_creation_ephemeral_1h_tokens: 0,
             cache_read_tokens: 0,
+            image_count: 0,
             cache_ttl_minutes: None,
         }
     }

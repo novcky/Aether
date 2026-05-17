@@ -86,6 +86,7 @@ impl DefaultBillingRuleGenerator {
             ),
             ("cache_read_tokens", "cache_read_tokens", json!(0)),
             ("request_count", "request_count", json!(1)),
+            ("image_count", "image_count", json!(0)),
         ] {
             dimension_mappings.insert(
                 name.to_string(),

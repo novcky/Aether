@@ -1104,8 +1104,10 @@ async fn gateway_routes_openai_chat_stream_image_intent_to_openai_image_plan_wit
         StatusCode::OK,
         "{response_text}\n{stored_candidates:#?}"
     );
-    assert!(response_text.contains("image_generation.completed"));
-    assert!(response_text.contains("aGVsbG8="));
+    assert!(response_text.contains("\"object\":\"chat.completion.chunk\""));
+    assert!(response_text.contains("![generated image](data:image/png;base64,aGVsbG8=)"));
+    assert!(response_text.contains("data: [DONE]"));
+    assert!(!response_text.contains("image_generation.completed"));
 
     let seen_plan = seen_execution_plan
         .lock()
@@ -1113,7 +1115,7 @@ async fn gateway_routes_openai_chat_stream_image_intent_to_openai_image_plan_wit
         .clone()
         .expect("execution plan should be captured");
     assert_eq!(seen_plan.trace_id, "trace-chat-stream-image-bridge-123");
-    assert_eq!(seen_plan.client_api_format, "openai:image");
+    assert_eq!(seen_plan.client_api_format, "openai:chat");
     assert_eq!(seen_plan.provider_api_format, "openai:image");
     assert_eq!(seen_plan.url, "https://images.example.com/v1/responses");
     assert!(seen_plan.plan_stream);

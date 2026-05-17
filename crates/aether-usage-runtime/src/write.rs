@@ -243,7 +243,8 @@ pub fn build_lifecycle_usage_seed(
     let model = context_string(context, "model")
         .or_else(|| non_empty_str(plan.model_name.as_deref()))
         .unwrap_or_else(|| "unknown".to_string());
-    let request_type = infer_request_type(api_format.as_deref());
+    let request_type =
+        infer_request_type_from_contracts(api_format.as_deref(), endpoint_api_format.as_deref());
     let api_family = api_format
         .as_deref()
         .and_then(infer_api_family)
@@ -645,7 +646,10 @@ pub fn build_terminal_usage_context_seed(
         .or_else(|| context_string(context, "provider_api_format"))
         .or_else(|| non_empty_str(Some(plan.provider_api_format.as_str())))
         .unwrap_or_default();
-    let request_type = infer_request_type(Some(client_contract.as_str()));
+    let request_type = infer_request_type_from_contracts(
+        Some(client_contract.as_str()),
+        Some(provider_contract.as_str()),
+    );
     let has_format_conversion = resolve_has_format_conversion(
         context,
         client_contract.as_str(),
@@ -1237,7 +1241,10 @@ fn build_usage_event_data_seed_with_detail(
     let provider_name = context_string(context, "provider_name")
         .or_else(|| non_empty_str(plan.provider_name.as_deref()))
         .unwrap_or_else(|| "unknown".to_string());
-    let request_type = Some(infer_request_type(api_format.as_deref()));
+    let request_type = Some(infer_request_type_from_contracts(
+        api_format.as_deref(),
+        endpoint_api_format.as_deref(),
+    ));
     let api_family = api_format
         .as_deref()
         .and_then(infer_api_family)
@@ -1858,6 +1865,19 @@ fn infer_request_type(api_format: Option<&str>) -> String {
     }
 }
 
+fn infer_request_type_from_contracts(
+    client_api_format: Option<&str>,
+    provider_api_format: Option<&str>,
+) -> String {
+    if matches!(
+        infer_endpoint_kind(provider_api_format.unwrap_or_default()),
+        Some("image")
+    ) {
+        return "image".to_string();
+    }
+    infer_request_type(client_api_format)
+}
+
 fn infer_api_family(api_format: &str) -> Option<&str> {
     api_format.split_once(':').map(|(family, _)| family)
 }
@@ -1891,6 +1911,41 @@ fn apply_standardized_usage_seed(usage: &StandardizedUsage, data: &mut UsageEven
     if total_tokens > 0 {
         data.total_tokens = Some(total_tokens);
     }
+    apply_standardized_usage_dimensions_seed(usage, data);
+}
+
+fn apply_standardized_usage_dimensions_seed(usage: &StandardizedUsage, data: &mut UsageEventData) {
+    if usage.dimensions.is_empty() && usage.request_count <= 0 {
+        return;
+    }
+
+    let mut dimensions = usage
+        .dimensions
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<Map<String, Value>>();
+    if usage.request_count > 0 {
+        dimensions
+            .entry("request_count".to_string())
+            .or_insert_with(|| json!(usage.request_count));
+    }
+    if dimensions.is_empty() {
+        return;
+    }
+
+    let mut metadata = match data.request_metadata.take() {
+        Some(Value::Object(object)) => object,
+        _ => Map::new(),
+    };
+    let mut existing_dimensions = match metadata.remove("dimensions") {
+        Some(Value::Object(object)) => object,
+        _ => Map::new(),
+    };
+    for (key, value) in dimensions {
+        existing_dimensions.insert(key, value);
+    }
+    metadata.insert("dimensions".to_string(), Value::Object(existing_dimensions));
+    data.request_metadata = Some(Value::Object(metadata));
 }
 
 fn standardized_usage_total_tokens(usage: &StandardizedUsage) -> u64 {

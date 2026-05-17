@@ -814,10 +814,10 @@ async fn resolve_openai_chat_to_openai_image_payload_parts(
     }
 
     let (execution_strategy, conversion_mode) =
-        ai_local_execution_contract_for_formats("openai:image", provider_api_format);
+        ai_local_execution_contract_for_formats("openai:chat", provider_api_format);
 
     Ok(Some(LocalOpenAiChatCandidatePayloadParts {
-        client_api_format: "openai:image".to_string(),
+        client_api_format: "openai:chat".to_string(),
         auth_header: prepared_candidate.auth_header,
         auth_value: prepared_candidate.auth_value,
         mapped_model: prepared_candidate.mapped_model,
@@ -827,7 +827,7 @@ async fn resolve_openai_chat_to_openai_image_payload_parts(
         upstream_url,
         execution_strategy,
         conversion_mode,
-        report_kind: "openai_image_stream_success".to_string(),
+        report_kind: "openai_chat_stream_success".to_string(),
         envelope_name: None,
         transport: Arc::clone(transport),
         request_redacted: false,

@@ -386,7 +386,7 @@ pub(crate) async fn build_local_openai_chat_image_candidate_attempt_source<'a>(
     Ok(build_local_execution_candidate_attempt_source_with_serving(
         planner_state,
         trace_id,
-        "openai:image",
+        "openai:chat",
         Some(&input.requested_model),
         Some(&input.auth_snapshot),
         input.client_session_affinity.as_ref(),
@@ -400,12 +400,12 @@ pub(crate) async fn build_local_openai_chat_image_candidate_attempt_source<'a>(
         |eligible| {
             let provider_api_format = eligible.provider_api_format.clone();
             let (execution_strategy, conversion_mode) =
-                ai_local_execution_contract_for_formats("openai:image", &provider_api_format);
+                ai_local_execution_contract_for_formats("openai:chat", &provider_api_format);
             Some(build_local_execution_candidate_contract_metadata(
                 LocalExecutionCandidateMetadataParts {
                     eligible,
                     provider_api_format: provider_api_format.as_str(),
-                    client_api_format: "openai:image",
+                    client_api_format: "openai:chat",
                     extra_fields: serde_json::Map::new(),
                 },
                 execution_strategy,
@@ -426,13 +426,13 @@ pub(crate) async fn build_local_openai_chat_image_candidate_attempt_source<'a>(
                         .to_ascii_lowercase()
                 });
             let (execution_strategy, conversion_mode) =
-                ai_local_execution_contract_for_formats("openai:image", &provider_api_format);
+                ai_local_execution_contract_for_formats("openai:chat", &provider_api_format);
             skipped_candidate.extra_data = Some(
                 build_local_execution_candidate_contract_metadata_for_candidate(
                     &skipped_candidate.candidate,
                     skipped_candidate.transport_ref(),
                     provider_api_format.as_str(),
-                    "openai:image",
+                    "openai:chat",
                     serde_json::Map::new(),
                     execution_strategy,
                     conversion_mode,
