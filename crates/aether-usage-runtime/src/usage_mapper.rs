@@ -687,7 +687,10 @@ mod tests {
         );
 
         assert_eq!(usage.request_count, 2);
-        assert_eq!(usage.dimensions.get("image_count"), Some(&serde_json::json!(2)));
+        assert_eq!(
+            usage.dimensions.get("image_count"),
+            Some(&serde_json::json!(2))
+        );
     }
 
     #[test]
@@ -707,6 +710,9 @@ mod tests {
         assert_eq!(usage.input_tokens, 11);
         assert_eq!(usage.output_tokens, 22);
         assert_eq!(usage.request_count, 1);
-        assert_eq!(usage.dimensions.get("image_count"), Some(&serde_json::json!(1)));
+        assert_eq!(
+            usage.dimensions.get("image_count"),
+            Some(&serde_json::json!(1))
+        );
     }
 }

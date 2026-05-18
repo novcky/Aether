@@ -161,6 +161,13 @@
                       >
                         矩阵
                       </Badge>
+                      <Badge
+                        v-if="imagePriceRangeEntries.length > 0"
+                        variant="outline"
+                        class="text-[10px] h-5 px-1.5"
+                      >
+                        区间
+                      </Badge>
                     </div>
                     <span
                       v-if="imageOutputDefaultPrice !== null"
@@ -198,6 +205,45 @@
                           <TableCell
                             v-for="quality in IMAGE_OUTPUT_QUALITIES"
                             :key="`${entry.size}-${quality}`"
+                            class="py-2 text-right font-mono"
+                          >
+                            {{ formatImagePrice(entry.prices[quality]) }}
+                          </TableCell>
+                        </TableRow>
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <div
+                    v-if="imagePriceRangeEntries.length > 0"
+                    class="border rounded-lg overflow-hidden"
+                  >
+                    <Table>
+                      <TableHeader>
+                        <TableRow class="bg-muted/30">
+                          <TableHead class="text-xs h-9">
+                            上限像素
+                          </TableHead>
+                          <TableHead
+                            v-for="quality in IMAGE_OUTPUT_QUALITIES"
+                            :key="quality"
+                            class="text-xs h-9 text-right"
+                          >
+                            {{ quality }}
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        <TableRow
+                          v-for="entry in imagePriceRangeEntries"
+                          :key="entry.key"
+                          class="text-xs"
+                        >
+                          <TableCell class="py-2 font-mono">
+                            {{ formatPixelLimit(entry.upToPixels) }}
+                          </TableCell>
+                          <TableCell
+                            v-for="quality in IMAGE_OUTPUT_QUALITIES"
+                            :key="`${entry.key}-${quality}`"
                             class="py-2 text-right font-mono"
                           >
                             {{ formatImagePrice(entry.prices[quality]) }}
@@ -640,8 +686,26 @@ const imagePricingEntries = computed(() => {
   })).filter(entry => Object.values(entry.prices).some(price => price !== null))
 })
 
+const imagePriceRangeEntries = computed(() => {
+  const ranges = props.model?.default_tiered_pricing?.image_output_price_ranges
+  if (!Array.isArray(ranges)) return []
+  return ranges.map((range, index) => {
+    const object = range && typeof range === 'object' ? range as Record<string, unknown> : {}
+    const rawPrices = object.prices && typeof object.prices === 'object'
+      ? object.prices
+      : object
+    return {
+      key: `${object.up_to_pixels ?? 'unbounded'}-${index}`,
+      upToPixels: toFiniteNumber(object.up_to_pixels),
+      prices: normalizeImageQualityPrices(rawPrices),
+    }
+  }).filter(entry => Object.values(entry.prices).some(price => price !== null))
+})
+
 const hasImagePricing = computed(() =>
-  imageOutputDefaultPrice.value !== null || imagePricingEntries.value.length > 0,
+  imageOutputDefaultPrice.value !== null
+    || imagePricingEntries.value.length > 0
+    || imagePriceRangeEntries.value.length > 0,
 )
 
 function normalizeImageQualityPrices(value: unknown): Record<typeof IMAGE_OUTPUT_QUALITIES[number], number | null> {
@@ -663,6 +727,20 @@ function formatImagePrice(value: number | null): string {
 
 function formatImageSize(value: string): string {
   return value.replace(/\s*[xX×]\s*/g, ' x ')
+}
+
+function formatPixelLimit(value: number | null): string {
+  return value === null ? '无上限' : `<= ${formatPixels(value)}`
+}
+
+function formatPixels(value: number): string {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 2)}M px`
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(0)}K px`
+  }
+  return `${value} px`
 }
 
 const detailTab = ref('basic')

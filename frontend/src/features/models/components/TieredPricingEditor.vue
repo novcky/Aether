@@ -142,7 +142,7 @@
       class="rounded-lg border bg-muted/10 p-3 space-y-3"
     >
       <div class="flex flex-wrap items-end justify-between gap-3">
-        <Label class="text-xs font-medium">图像输出矩阵 ($/张)</Label>
+        <Label class="text-xs font-medium">图像输出计费 ($/张)</Label>
         <div class="flex items-center gap-2">
           <Label class="text-xs text-muted-foreground">默认价</Label>
           <Input
@@ -158,6 +158,10 @@
       </div>
 
       <div class="space-y-2">
+        <div class="flex items-center justify-between gap-2">
+          <Label class="text-xs text-muted-foreground">精确分辨率覆盖</Label>
+          <span class="text-[11px] text-muted-foreground">优先匹配 size + quality</span>
+        </div>
         <div class="grid grid-cols-[minmax(120px,1.1fr)_repeat(3,minmax(0,1fr))_32px] gap-2 text-xs text-muted-foreground">
           <span>分辨率</span>
           <span>low</span>
@@ -208,6 +212,64 @@
           添加分辨率
         </Button>
       </div>
+
+      <div class="space-y-2 border-t pt-3">
+        <div class="flex items-center justify-between gap-2">
+          <Label class="text-xs text-muted-foreground">像素区间</Label>
+          <span class="text-[11px] text-muted-foreground">矩阵未命中时按宽×高落档</span>
+        </div>
+        <div class="grid grid-cols-[minmax(120px,1.1fr)_repeat(3,minmax(0,1fr))_32px] gap-2 text-xs text-muted-foreground">
+          <span>上限像素</span>
+          <span>low</span>
+          <span>medium</span>
+          <span>high</span>
+          <span />
+        </div>
+        <div
+          v-for="row in imageOutputPriceRangeRows"
+          :key="row.id"
+          class="grid grid-cols-[minmax(120px,1.1fr)_repeat(3,minmax(0,1fr))_32px] gap-2 items-center"
+        >
+          <Input
+            :model-value="row.upToPixels"
+            type="number"
+            min="1"
+            class="h-8 font-mono text-xs"
+            placeholder="空=无上限"
+            @update:model-value="(v) => updateImageOutputRangeLimit(row.id, v)"
+          />
+          <Input
+            v-for="quality in IMAGE_OUTPUT_QUALITIES"
+            :key="`${row.id}-${quality}`"
+            :model-value="getImageOutputRangePrice(row, quality)"
+            type="number"
+            step="0.001"
+            min="0"
+            class="h-8"
+            placeholder="0"
+            @update:model-value="(v) => updateImageOutputRangePrice(row.id, quality, v)"
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            class="h-8 w-8 p-0"
+            @click="removeImageOutputRangeRow(row.id)"
+          >
+            <X class="w-4 h-4 text-muted-foreground hover:text-destructive" />
+          </Button>
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          class="w-full"
+          @click="addImageOutputRangeRow"
+        >
+          <Plus class="w-4 h-4 mr-2" />
+          添加像素区间
+        </Button>
+      </div>
     </div>
 
     <!-- 验证提示 -->
@@ -224,7 +286,7 @@
 import { ref, computed, watch, reactive } from 'vue'
 import { Plus, X } from 'lucide-vue-next'
 import { Button, Input, Label } from '@/components/ui'
-import type { TieredPricingConfig, PricingTier } from '@/api/endpoints/types'
+import type { TieredPricingConfig, PricingTier, ImageOutputPriceRange } from '@/api/endpoints/types'
 
 type ImageOutputQuality = 'low' | 'medium' | 'high'
 type ImageOutputPriceRow = {
@@ -232,8 +294,14 @@ type ImageOutputPriceRow = {
   size: string
   prices: Partial<Record<ImageOutputQuality, number>>
 }
+type ImageOutputPriceRangeRow = {
+  id: string
+  upToPixels: string
+  prices: Partial<Record<ImageOutputQuality, number>>
+}
 
 const DEFAULT_IMAGE_OUTPUT_SIZES = ['1024x1024', '1536x1024', '1024x1536']
+const DEFAULT_IMAGE_OUTPUT_PIXEL_LIMITS = [1_048_576, 1_572_864, 2_097_152]
 const IMAGE_OUTPUT_QUALITIES: ImageOutputQuality[] = ['low', 'medium', 'high']
 
 const props = defineProps<{
@@ -249,9 +317,11 @@ const emit = defineEmits<{
 // 本地状态
 const localTiers = ref<PricingTier[]>([])
 const imageOutputPriceRows = ref<ImageOutputPriceRow[]>([])
+const imageOutputPriceRangeRows = ref<ImageOutputPriceRangeRow[]>([])
 const imageOutputPriceDefault = ref<string>('')
 const lastEmittedPricingJson = ref<string>('')
 let imageOutputPriceRowId = 0
+let imageOutputPriceRangeRowId = 0
 
 // 跟踪每个阶梯的缓存价格是否被手动设置
 const cacheManuallySet = reactive<Record<number, { creation: boolean; read: boolean; cache1h: boolean }>>({})
@@ -280,6 +350,7 @@ watch(
     if (newValue?.tiers) {
       localTiers.value = newValue.tiers.map(t => ({ ...t }))
       imageOutputPriceRows.value = createImageOutputPriceRows(newValue.image_output_prices)
+      imageOutputPriceRangeRows.value = createImageOutputPriceRangeRows(newValue.image_output_price_ranges)
       imageOutputPriceDefault.value = newValue.image_output_price_default != null
         ? String(newValue.image_output_price_default)
         : ''
@@ -299,6 +370,7 @@ watch(
         output_price_per_1m: 0,
       }]
       imageOutputPriceRows.value = createImageOutputPriceRows(null)
+      imageOutputPriceRangeRows.value = createImageOutputPriceRangeRows(null)
       imageOutputPriceDefault.value = ''
       cacheManuallySet[0] = { creation: false, read: false, cache1h: false }
     }
@@ -524,6 +596,10 @@ function buildPricingConfig(tiers: PricingTier[]): TieredPricingConfig {
   if (Object.keys(matrix).length > 0) {
     config.image_output_prices = matrix
   }
+  const ranges = normalizedImageOutputPriceRanges()
+  if (ranges.length > 0) {
+    config.image_output_price_ranges = ranges
+  }
   const defaultPrice = parseOptionalFloat(imageOutputPriceDefault.value)
   if (defaultPrice != null) {
     config.image_output_price_default = defaultPrice
@@ -551,6 +627,31 @@ function createImageOutputPriceRows(value: TieredPricingConfig['image_output_pri
   return DEFAULT_IMAGE_OUTPUT_SIZES.map(size => createImageOutputPriceRow(size))
 }
 
+function createImageOutputPriceRangeRows(value: TieredPricingConfig['image_output_price_ranges']): ImageOutputPriceRangeRow[] {
+  const rows: ImageOutputPriceRangeRow[] = []
+  if (!Array.isArray(value)) {
+    return rows
+  }
+  for (const range of value) {
+    if (!range || typeof range !== 'object') continue
+    const rowPrices: Partial<Record<ImageOutputQuality, number>> = {}
+    const rawPrices = 'prices' in range && range.prices && typeof range.prices === 'object'
+      ? range.prices as Record<string, unknown>
+      : range as Record<string, unknown>
+    for (const quality of IMAGE_OUTPUT_QUALITIES) {
+      const price = rawPrices[quality]
+      if (typeof price === 'number' && Number.isFinite(price)) {
+        rowPrices[quality] = price
+      }
+    }
+    const upToPixels = 'up_to_pixels' in range && range.up_to_pixels != null
+      ? String(range.up_to_pixels)
+      : ''
+    rows.push(createImageOutputPriceRangeRow(upToPixels, rowPrices))
+  }
+  return rows
+}
+
 function createImageOutputPriceRow(
   size = '',
   prices: Partial<Record<ImageOutputQuality, number>> = {},
@@ -559,6 +660,18 @@ function createImageOutputPriceRow(
   return {
     id: `image-output-size-${imageOutputPriceRowId}`,
     size,
+    prices: { ...prices },
+  }
+}
+
+function createImageOutputPriceRangeRow(
+  upToPixels = '',
+  prices: Partial<Record<ImageOutputQuality, number>> = {},
+): ImageOutputPriceRangeRow {
+  imageOutputPriceRangeRowId += 1
+  return {
+    id: `image-output-range-${imageOutputPriceRangeRowId}`,
+    upToPixels,
     prices: { ...prices },
   }
 }
@@ -578,10 +691,40 @@ function normalizedImageOutputPrices(): Record<string, Record<string, number>> {
   return out
 }
 
+function normalizedImageOutputPriceRanges(): ImageOutputPriceRange[] {
+  const ranges: ImageOutputPriceRange[] = []
+  for (const row of imageOutputPriceRangeRows.value) {
+    const prices: Partial<Record<ImageOutputQuality, number>> = {}
+    for (const quality of IMAGE_OUTPUT_QUALITIES) {
+      const price = row.prices[quality]
+      if (price != null && Number.isFinite(price)) {
+        prices[quality] = price
+      }
+    }
+    if (Object.keys(prices).length === 0) continue
+    ranges.push({
+      up_to_pixels: parseOptionalInteger(row.upToPixels),
+      prices,
+    })
+  }
+  return ranges.sort((a, b) => {
+    if (a.up_to_pixels == null && b.up_to_pixels == null) return 0
+    if (a.up_to_pixels == null) return 1
+    if (b.up_to_pixels == null) return -1
+    return a.up_to_pixels - b.up_to_pixels
+  })
+}
+
 function parseOptionalFloat(value: string | number): number | null {
   if (value === '' || value === null || value === undefined) return null
   const number = typeof value === 'string' ? parseFloat(value) : value
   return Number.isFinite(number) ? number : null
+}
+
+function parseOptionalInteger(value: string | number): number | null {
+  if (value === '' || value === null || value === undefined) return null
+  const number = typeof value === 'string' ? parseInt(value, 10) : value
+  return Number.isFinite(number) && number > 0 ? Math.trunc(number) : null
 }
 
 function normalizeImageOutputSize(size: string): string {
@@ -589,6 +732,10 @@ function normalizeImageOutputSize(size: string): string {
 }
 
 function getImageOutputPrice(row: ImageOutputPriceRow, quality: ImageOutputQuality): string | number {
+  return row.prices[quality] ?? ''
+}
+
+function getImageOutputRangePrice(row: ImageOutputPriceRangeRow, quality: ImageOutputQuality): string | number {
   return row.prices[quality] ?? ''
 }
 
@@ -622,6 +769,39 @@ function addImageOutputSizeRow() {
 
 function removeImageOutputSizeRow(rowId: string) {
   imageOutputPriceRows.value = imageOutputPriceRows.value.filter(row => row.id !== rowId)
+  syncToParent()
+}
+
+function updateImageOutputRangeLimit(rowId: string, value: string | number) {
+  const row = imageOutputPriceRangeRows.value.find(item => item.id === rowId)
+  if (!row) return
+  row.upToPixels = String(value ?? '')
+  imageOutputPriceRangeRows.value = [...imageOutputPriceRangeRows.value]
+  syncToParent()
+}
+
+function updateImageOutputRangePrice(rowId: string, quality: ImageOutputQuality, value: string | number) {
+  const row = imageOutputPriceRangeRows.value.find(item => item.id === rowId)
+  if (!row) return
+  const price = parseOptionalFloat(value)
+  if (price == null) {
+    delete row.prices[quality]
+  } else {
+    row.prices[quality] = price
+  }
+  imageOutputPriceRangeRows.value = [...imageOutputPriceRangeRows.value]
+  syncToParent()
+}
+
+function addImageOutputRangeRow() {
+  const usedLimits = new Set(imageOutputPriceRangeRows.value.map(row => parseOptionalInteger(row.upToPixels)).filter((value): value is number => value !== null))
+  const suggestedLimit = DEFAULT_IMAGE_OUTPUT_PIXEL_LIMITS.find(limit => !usedLimits.has(limit))
+  imageOutputPriceRangeRows.value = [...imageOutputPriceRangeRows.value, createImageOutputPriceRangeRow(suggestedLimit ? String(suggestedLimit) : '')]
+  syncToParent()
+}
+
+function removeImageOutputRangeRow(rowId: string) {
+  imageOutputPriceRangeRows.value = imageOutputPriceRangeRows.value.filter(row => row.id !== rowId)
   syncToParent()
 }
 

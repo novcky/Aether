@@ -403,13 +403,9 @@
                           {{ imageOutputBillingLabel }}
                         </Badge>
                         <span
-                          v-if="imageOutputMatrixEnabled && imagePriceKey"
+                          v-if="imageOutputPricingDescriptor"
                           class="text-muted-foreground font-mono"
-                        >{{ imagePriceKey }}</span>
-                        <span
-                          v-else-if="imageOutputSize || imageOutputQuality"
-                          class="text-muted-foreground font-mono"
-                        >{{ [imageOutputSize, imageOutputQuality].filter(Boolean).join(' / ') }}</span>
+                        >{{ imageOutputPricingDescriptor }}</span>
                       </div>
                       <div class="text-muted-foreground flex items-center gap-2 flex-wrap">
                         <span
@@ -1482,6 +1478,15 @@ const imagePriceKey = computed(() => {
   return fallbackKey || null
 })
 
+const imageOutputPriceBucket = computed(() =>
+  getNestedString(billingResolvedDimensions.value, 'image_output_price_bucket'),
+)
+
+const imageOutputPixels = computed(() =>
+  getNestedNumber(billingResolvedDimensions.value, 'image_pixels')
+  ?? parseImageSizePixels(imageOutputSize.value),
+)
+
 const imageOutputPricingMode = computed(() =>
   getNestedString(billingResolvedDimensions.value, 'image_output_pricing_mode'),
 )
@@ -1489,18 +1494,43 @@ const imageOutputPricingMode = computed(() =>
 const imageOutputPricingEnabled = computed(() =>
   getNestedValue(billingResolvedDimensions.value, 'image_output_pricing_enabled') === true
     || imageOutputPricingMode.value === 'matrix'
+    || imageOutputPricingMode.value === 'pixel_tiers'
     || imageOutputPricingMode.value === 'per_image'
     || imageOutputCostTotal.value > 0,
 )
 
-const imageOutputMatrixEnabled = computed(() =>
-  getNestedValue(billingResolvedDimensions.value, 'image_output_matrix_enabled') === true
-    || imageOutputPricingMode.value === 'matrix',
-)
+const imageOutputMatrixEnabled = computed(() => {
+  if (imageOutputPricingMode.value) return imageOutputPricingMode.value === 'matrix'
+  return getNestedValue(billingResolvedDimensions.value, 'image_output_matrix_enabled') === true
+})
 
-const imageOutputBillingLabel = computed(() =>
-  imageOutputMatrixEnabled.value ? '矩阵计费' : '默认计费',
-)
+const imageOutputRangeEnabled = computed(() => {
+  if (imageOutputPricingMode.value) return imageOutputPricingMode.value === 'pixel_tiers'
+  return getNestedValue(billingResolvedDimensions.value, 'image_output_range_enabled') === true
+})
+
+const imageOutputBillingLabel = computed(() => {
+  if (imageOutputMatrixEnabled.value) return '矩阵计费'
+  if (imageOutputRangeEnabled.value) return '像素区间'
+  return '默认计费'
+})
+
+const imageOutputPricingDescriptor = computed(() => {
+  if (imageOutputMatrixEnabled.value && imagePriceKey.value) return imagePriceKey.value
+
+  const parts: string[] = []
+  if (imageOutputPriceBucket.value && imageOutputPriceBucket.value !== 'default') {
+    parts.push(formatImagePriceBucket(imageOutputPriceBucket.value))
+  }
+  const sizeQuality = [imageOutputSize.value, imageOutputQuality.value].filter(Boolean).join(' / ')
+  if (sizeQuality) parts.push(sizeQuality)
+  if (imageOutputRangeEnabled.value && imageOutputPixels.value !== null) {
+    parts.push(formatPixels(imageOutputPixels.value))
+  }
+  if (parts.length > 0) return parts.join(' · ')
+  if (imageOutputPriceBucket.value === 'default') return '默认价'
+  return null
+})
 
 const hasImageBillingDetail = computed(() =>
   imageOutputPricingEnabled.value && (imageOutputCount.value > 0 || imageOutputCostTotal.value > 0),
@@ -2204,6 +2234,34 @@ function formatNumber(num: number): string {
     return `${(num / 1_000).toFixed(1)  }K`
   }
   return num.toLocaleString()
+}
+
+function parseImageSizePixels(size: string | null): number | null {
+  if (!size) return null
+  const normalized = size.trim().toLowerCase().replace(/\s+/g, '').replace(/×/g, 'x')
+  const [widthText, heightText] = normalized.split('x')
+  const width = Number(widthText)
+  const height = Number(heightText)
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null
+  return Math.trunc(width * height)
+}
+
+function formatImagePriceBucket(bucket: string): string {
+  if (bucket === 'default') return '默认价'
+  if (bucket === 'unbounded') return '无上限'
+  const match = bucket.match(/^<=([0-9]+)px$/)
+  if (match) return `<= ${formatPixels(Number(match[1]))}`
+  return bucket
+}
+
+function formatPixels(value: number): string {
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 2)}M px`
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(0)}K px`
+  }
+  return `${value} px`
 }
 
 // 格式化响应时间，自动选择合适的单位

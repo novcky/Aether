@@ -948,8 +948,15 @@ async function handleSubmit() {
 function tieredPricingHasImageOutputPricing(pricing: TieredPricingConfig | null | undefined): boolean {
   if (!pricing) return false
   if (toFinitePrice(pricing.image_output_price_default) !== null) return true
-  return Object.values(pricing.image_output_prices || {}).some((prices) => {
+  if (Object.values(pricing.image_output_prices || {}).some((prices) => {
     if (!prices || typeof prices !== 'object') return false
+    return Object.values(prices).some((price) => toFinitePrice(price) !== null)
+  })) return true
+  return (pricing.image_output_price_ranges || []).some((range) => {
+    if (!range || typeof range !== 'object') return false
+    const prices = range.prices && typeof range.prices === 'object'
+      ? range.prices
+      : range as Record<string, unknown>
     return Object.values(prices).some((price) => toFinitePrice(price) !== null)
   })
 }

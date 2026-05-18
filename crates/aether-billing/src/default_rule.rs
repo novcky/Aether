@@ -30,13 +30,16 @@ impl DefaultBillingRuleGenerator {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let image_output_price_entries = explicit_image_output_price_entries(pricing_config)
-            .filter(|entries| !entries.is_empty())
-            .unwrap_or_default();
-        let explicit_image_output_price_default = explicit_image_output_price_default(pricing_config);
+        let explicit_image_output_price_default =
+            explicit_image_output_price_default(pricing_config);
         let image_output_price_default = explicit_image_output_price_default.unwrap_or(0.0);
-        let has_image_output_pricing =
-            !image_output_price_entries.is_empty() || explicit_image_output_price_default.is_some();
+        let has_image_output_matrix = explicit_image_output_price_entries(pricing_config)
+            .is_some_and(|entries| !entries.is_empty());
+        let has_image_output_ranges = explicit_image_output_price_ranges(pricing_config)
+            .is_some_and(|ranges| !ranges.is_empty());
+        let has_image_output_pricing = has_image_output_matrix
+            || has_image_output_ranges
+            || explicit_image_output_price_default.is_some();
 
         if tiers.is_empty()
             && pricing.effective_price_per_request().is_none()
@@ -104,6 +107,11 @@ impl DefaultBillingRuleGenerator {
             ("image_count", "image_count", json!(0)),
             ("image_count_unmetered", "image_count_unmetered", json!(0)),
             ("image_price_key", "image_price_key", json!("default")),
+            (
+                "image_output_price_per_image",
+                "image_output_price_per_image",
+                json!(image_output_price_default),
+            ),
         ] {
             dimension_mappings.insert(
                 name.to_string(),
@@ -152,18 +160,6 @@ impl DefaultBillingRuleGenerator {
                     "expression": expression,
                     "required": false,
                     "default": 0,
-                }),
-            );
-        }
-
-        if !image_output_price_entries.is_empty() {
-            dimension_mappings.insert(
-                "image_output_price_per_image".to_string(),
-                json!({
-                    "source": "matrix",
-                    "key": "image_price_key",
-                    "entries": image_output_price_entries,
-                    "default": image_output_price_default,
                 }),
             );
         }
@@ -302,7 +298,7 @@ fn build_tier_entries(
         .collect()
 }
 
-fn explicit_image_output_price_entries(
+pub(crate) fn explicit_image_output_price_entries(
     pricing_config: Option<&Value>,
 ) -> Option<BTreeMap<String, Value>> {
     let pricing_config = pricing_config?;
@@ -320,7 +316,93 @@ fn explicit_image_output_price_entries(
     Some(entries)
 }
 
-fn explicit_image_output_price_default(pricing_config: Option<&Value>) -> Option<f64> {
+pub(crate) fn explicit_image_output_price_ranges(
+    pricing_config: Option<&Value>,
+) -> Option<Vec<Value>> {
+    let pricing_config = pricing_config?;
+    let Some(value) = pricing_config.get("image_output_price_ranges") else {
+        return Some(Vec::new());
+    };
+
+    let mut ranges = Vec::new();
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                let Some(object) = item.as_object() else {
+                    continue;
+                };
+                let mut range = serde_json::Map::new();
+                if let Some(up_to_pixels) = object
+                    .get("up_to_pixels")
+                    .or_else(|| object.get("up_to"))
+                    .or_else(|| object.get("max_pixels"))
+                {
+                    range.insert("up_to_pixels".to_string(), up_to_pixels.clone());
+                }
+                if let Some(label) = object.get("label").cloned() {
+                    range.insert("label".to_string(), label);
+                }
+                if let Some(prices) = object.get("prices") {
+                    range.insert("prices".to_string(), prices.clone());
+                } else {
+                    let mut prices = serde_json::Map::new();
+                    for quality in ["low", "medium", "high"] {
+                        if let Some(price) = object.get(quality).and_then(Value::as_f64) {
+                            prices.insert(quality.to_string(), json!(price));
+                        }
+                    }
+                    if prices.is_empty() {
+                        if let Some(price) = object
+                            .get("price_per_image")
+                            .or_else(|| object.get("price"))
+                            .or_else(|| object.get("value"))
+                            .and_then(Value::as_f64)
+                        {
+                            prices.insert("default".to_string(), json!(price));
+                        }
+                    }
+                    if !prices.is_empty() {
+                        range.insert("prices".to_string(), Value::Object(prices));
+                    }
+                }
+                if !range.is_empty() {
+                    ranges.push(Value::Object(range));
+                }
+            }
+        }
+        Value::Object(object) => {
+            for (key, item) in object {
+                let Some(entry) = item.as_object() else {
+                    continue;
+                };
+                let mut range = serde_json::Map::new();
+                if let Some(up_to_pixels) = entry
+                    .get("up_to_pixels")
+                    .or_else(|| entry.get("up_to"))
+                    .or_else(|| entry.get("max_pixels"))
+                {
+                    range.insert("up_to_pixels".to_string(), up_to_pixels.clone());
+                } else if let Ok(parsed) = key.parse::<u64>() {
+                    range.insert("up_to_pixels".to_string(), json!(parsed));
+                }
+                if let Some(label) = entry.get("label").cloned() {
+                    range.insert("label".to_string(), label);
+                }
+                if let Some(prices) = entry.get("prices") {
+                    range.insert("prices".to_string(), prices.clone());
+                }
+                if !range.is_empty() {
+                    ranges.push(Value::Object(range));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    Some(ranges)
+}
+
+pub(crate) fn explicit_image_output_price_default(pricing_config: Option<&Value>) -> Option<f64> {
     let pricing_config = pricing_config?;
     pricing_config
         .get("image_output_price_default")

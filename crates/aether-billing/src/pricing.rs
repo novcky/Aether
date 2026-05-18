@@ -86,6 +86,7 @@ fn has_pricing_data(value: &Value) -> bool {
             .is_some()
         || [
             "image_output_prices",
+            "image_output_price_ranges",
             "image_output_price_per_image",
             "image_output_price_matrix",
             "image_prices",
