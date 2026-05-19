@@ -28,6 +28,7 @@ const ANTIGRAVITY_DAILY_BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.
 const ANTIGRAVITY_PROD_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
 const ANTIGRAVITY_BLOCKED_MODELS: &[&str] = &["chat_23310", "chat_20706"];
 const VERTEX_API_BASE_URL: &str = "https://aiplatform.googleapis.com";
+const VERTEX_MODEL_GARDEN_API_VERSION: &str = "v1beta1";
 const VERTEX_PAGE_SIZE: &str = "100";
 const VERTEX_MAX_PAGES: usize = 20;
 const GOOGLE_OAUTH_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
@@ -944,17 +945,18 @@ fn build_vertex_service_account_list_url(
 }
 
 fn build_vertex_publisher_models_list_base_url(base_url: &str, publisher: &str) -> String {
-    let trimmed_base = base_url.trim().trim_end_matches('/');
-    let path = if trimmed_base.ends_with("/v1") || trimmed_base.ends_with("/v1beta1") {
-        format!("/publishers/{publisher}/models")
-    } else {
-        format!("/v1beta1/publishers/{publisher}/models")
-    };
-    build_simple_path_url(trimmed_base, &path)
+    let path = format!("/{VERTEX_MODEL_GARDEN_API_VERSION}/publishers/{publisher}/models");
+    build_vertex_model_garden_path_url(base_url, &path)
 }
 
-fn build_simple_path_url(base_url: &str, path: &str) -> String {
-    format!("{}{}", base_url.trim().trim_end_matches('/'), path.trim())
+fn build_vertex_model_garden_path_url(base_url: &str, path: &str) -> String {
+    let base = base_url
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches("/v1beta1")
+        .trim_end_matches("/v1beta")
+        .trim_end_matches("/v1");
+    format!("{}{}", base, path.trim())
 }
 
 fn parse_vertex_models_payload(
@@ -1273,6 +1275,7 @@ mod tests {
     struct TestRuntime {
         executed_urls: Arc<Mutex<Vec<String>>>,
         response_body: Value,
+        status_code: u16,
     }
 
     #[async_trait]
@@ -1303,7 +1306,7 @@ mod tests {
             Ok(ExecutionResult {
                 request_id: plan.request_id.clone(),
                 candidate_id: plan.candidate_id.clone(),
-                status_code: 200,
+                status_code: self.status_code,
                 headers: BTreeMap::new(),
                 body: Some(ResponseBody {
                     json_body: Some(self.response_body.clone()),
@@ -1451,6 +1454,7 @@ mod tests {
                     "name": "publishers/google/models/gemini-3.1-pro-preview"
                 }]
             }),
+            status_code: 200,
         };
         let outcome =
             fetch_models_from_transports(&runtime, &[sample_custom_aiplatform_transport()])
@@ -1508,6 +1512,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn vertex_service_account_fetches_model_garden_publishers_without_project_prefix() {
+        assert_eq!(
+            super::build_vertex_service_account_list_url(
+                "https://us-central1-aiplatform.googleapis.com",
+                "google",
+                None
+            ),
+            "https://us-central1-aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=100"
+        );
+        assert_eq!(
+            super::build_vertex_service_account_list_url(
+                "https://aiplatform.googleapis.com/v1",
+                "anthropic",
+                Some("next")
+            ),
+            "https://aiplatform.googleapis.com/v1beta1/publishers/anthropic/models?pageSize=100&pageToken=next"
+        );
+        assert_eq!(
+            super::build_vertex_google_list_url(
+                "https://aiplatform.googleapis.com/v1beta1",
+                "vertex-secret",
+                Some("next")
+            ),
+            "https://aiplatform.googleapis.com/v1beta1/publishers/google/models?key=vertex-secret&pageSize=100&pageToken=next"
+        );
+    }
+
     #[tokio::test]
     async fn codex_transport_fetches_upstream_models_instead_of_preset_catalog() {
         let executed_urls = Arc::new(Mutex::new(Vec::new()));
@@ -1518,6 +1550,7 @@ mod tests {
                     "id": "gpt-5.4-upstream"
                 }]
             }),
+            status_code: 200,
         };
         let outcome = fetch_models_from_transports(&runtime, &[sample_codex_transport()])
             .await
@@ -1558,6 +1591,7 @@ mod tests {
                     }
                 ]
             }),
+            status_code: 200,
         };
         let outcome = fetch_models_from_transports(&runtime, &[sample_kiro_transport()])
             .await
