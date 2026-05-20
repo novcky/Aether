@@ -386,9 +386,8 @@ fn filter_memory_export_rows(
             .read()
             .expect("user repository lock")
             .keys()
-            .filter_map(|(candidate_group_id, user_id)| {
-                (candidate_group_id == group_id).then(|| user_id.clone())
-            })
+            .filter(|(candidate_group_id, _)| candidate_group_id == group_id)
+            .map(|(_, user_id)| user_id.clone())
             .collect::<std::collections::BTreeSet<_>>();
         rows.retain(|row| member_ids.contains(&row.id));
     }
