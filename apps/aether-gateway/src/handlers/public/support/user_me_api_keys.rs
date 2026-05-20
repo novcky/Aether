@@ -11,7 +11,8 @@ use serde_json::json;
 
 use crate::handlers::shared::{
     api_key_placeholder_display, deserialize_optional_json_patch,
-    generate_gateway_api_key_plaintext, masked_gateway_api_key_display, normalize_feature_settings,
+    deserialize_optional_string_list_patch, generate_gateway_api_key_plaintext,
+    masked_gateway_api_key_display, normalize_feature_settings,
     normalize_optional_api_key_concurrent_limit,
 };
 
@@ -34,6 +35,8 @@ struct UsersMeCreateApiKeyRequest {
     concurrent_limit: Option<i32>,
     #[serde(default)]
     feature_settings: Option<serde_json::Value>,
+    #[serde(default)]
+    allowed_ips: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,6 +49,8 @@ struct UsersMeUpdateApiKeyRequest {
     concurrent_limit: Option<i32>,
     #[serde(default, deserialize_with = "deserialize_optional_json_patch")]
     feature_settings: Option<Option<serde_json::Value>>,
+    #[serde(default, deserialize_with = "deserialize_optional_string_list_patch")]
+    allowed_ips: Option<Option<Vec<String>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -160,6 +165,7 @@ fn build_users_me_api_key_list_payload(
         "rate_limit": record.rate_limit,
         "concurrent_limit": record.concurrent_limit,
         "allowed_providers": record.allowed_providers,
+        "allowed_ips": record.allowed_ips,
         "force_capabilities": record.force_capabilities,
         "feature_settings": record.feature_settings,
     })
@@ -177,6 +183,7 @@ fn build_users_me_api_key_detail_payload(
         "is_active": record.is_active,
         "is_locked": is_locked,
         "allowed_providers": record.allowed_providers,
+        "allowed_ips": record.allowed_ips,
         "force_capabilities": record.force_capabilities,
         "feature_settings": record.feature_settings,
         "rate_limit": record.rate_limit,
@@ -197,6 +204,52 @@ fn normalize_users_me_required_api_key_name(value: &str) -> Result<String, Strin
 
 fn generate_users_me_api_key_plaintext() -> String {
     generate_gateway_api_key_plaintext()
+}
+
+fn users_me_validate_ip_or_cidr(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    if value.parse::<std::net::IpAddr>().is_ok() {
+        return true;
+    }
+    let Some((host, prefix)) = value.split_once('/') else {
+        return false;
+    };
+    let Ok(ip) = host.trim().parse::<std::net::IpAddr>() else {
+        return false;
+    };
+    let Ok(prefix) = prefix.trim().parse::<u8>() else {
+        return false;
+    };
+    match ip {
+        std::net::IpAddr::V4(_) => prefix <= 32,
+        std::net::IpAddr::V6(_) => prefix <= 128,
+    }
+}
+
+fn normalize_users_me_allowed_ips(
+    values: Option<Vec<String>>,
+) -> Result<Option<Vec<String>>, String> {
+    let Some(values) = values else {
+        return Ok(None);
+    };
+    if values.is_empty() {
+        return Err("IP 白名单不能为空列表，如需取消限制请不提供此字段".to_string());
+    }
+    let mut normalized = Vec::with_capacity(values.len());
+    for (index, raw) in values.into_iter().enumerate() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Err(format!("IP 白名单第 {} 项为空", index + 1));
+        }
+        if !users_me_validate_ip_or_cidr(trimmed) {
+            return Err(format!("无效的 IP 地址或 CIDR: {raw}"));
+        }
+        normalized.push(trimmed.to_string());
+    }
+    Ok(Some(normalized))
 }
 
 fn hash_users_me_api_key(value: &str) -> String {
@@ -542,6 +595,12 @@ pub(super) async fn handle_users_me_api_key_create(
             return build_auth_error_response(http::StatusCode::BAD_REQUEST, detail, false);
         }
     };
+    let allowed_ips = match normalize_users_me_allowed_ips(payload.allowed_ips) {
+        Ok(value) => value,
+        Err(detail) => {
+            return build_auth_error_response(http::StatusCode::BAD_REQUEST, detail, false);
+        }
+    };
 
     let plaintext_key = generate_users_me_api_key_plaintext();
     let Some(key_encrypted) = encrypt_catalog_secret_with_fallbacks(state, &plaintext_key) else {
@@ -560,6 +619,7 @@ pub(super) async fn handle_users_me_api_key_create(
         allowed_providers: None,
         allowed_api_formats: None,
         allowed_models: None,
+        allowed_ips,
         rate_limit,
         concurrent_limit,
         force_capabilities: None,
@@ -614,6 +674,7 @@ pub(super) async fn handle_users_me_api_key_create(
         "is_locked": false,
         "rate_limit": created.rate_limit,
         "concurrent_limit": created.concurrent_limit,
+        "allowed_ips": created.allowed_ips,
         "feature_settings": created.feature_settings,
         "last_used_at": format_users_me_optional_unix_secs_iso8601(created.last_used_at_unix_secs),
         "created_at": format_users_me_optional_unix_secs_iso8601(created.created_at_unix_secs),
@@ -695,6 +756,15 @@ pub(super) async fn handle_users_me_api_key_update(
         },
         None => None,
     };
+    let allowed_ips = match payload.allowed_ips {
+        Some(value) => match normalize_users_me_allowed_ips(value) {
+            Ok(value) => Some(value),
+            Err(detail) => {
+                return build_auth_error_response(http::StatusCode::BAD_REQUEST, detail, false);
+            }
+        },
+        None => None,
+    };
 
     let Some(updated) = (match state
         .update_user_api_key_basic(aether_data::repository::auth::UpdateUserApiKeyBasicRecord {
@@ -703,6 +773,7 @@ pub(super) async fn handle_users_me_api_key_update(
             name,
             rate_limit,
             concurrent_limit,
+            allowed_ips,
         })
         .await
     {
@@ -1056,4 +1127,59 @@ pub(super) async fn handle_users_me_api_key_capabilities_put(
         "force_capabilities": updated.force_capabilities.unwrap_or(serde_json::Value::Null),
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_users_me_allowed_ips, UsersMeUpdateApiKeyRequest};
+    use serde_json::json;
+
+    #[test]
+    fn normalize_allowed_ips_trims_ip_and_cidr_values() {
+        let values = normalize_users_me_allowed_ips(Some(vec![
+            " 203.0.113.10 ".to_string(),
+            "10.0.0.0/24".to_string(),
+        ]))
+        .expect("valid whitelist should normalize");
+
+        assert_eq!(
+            values,
+            Some(vec!["203.0.113.10".to_string(), "10.0.0.0/24".to_string()]),
+        );
+    }
+
+    #[test]
+    fn normalize_allowed_ips_rejects_invalid_cidr() {
+        let err = normalize_users_me_allowed_ips(Some(vec!["10.0.0.0/99".to_string()]))
+            .expect_err("invalid cidr should fail");
+
+        assert_eq!(err, "无效的 IP 地址或 CIDR: 10.0.0.0/99");
+    }
+
+    #[test]
+    fn update_payload_distinguishes_missing_null_and_present_allowed_ips() {
+        let missing = serde_json::from_value::<UsersMeUpdateApiKeyRequest>(json!({
+            "name": "unchanged-whitelist",
+        }))
+        .expect("missing allowed_ips should deserialize");
+        assert_eq!(missing.allowed_ips, None);
+
+        let cleared = serde_json::from_value::<UsersMeUpdateApiKeyRequest>(json!({
+            "allowed_ips": null,
+        }))
+        .expect("null allowed_ips should deserialize");
+        assert_eq!(cleared.allowed_ips, Some(None));
+
+        let updated = serde_json::from_value::<UsersMeUpdateApiKeyRequest>(json!({
+            "allowed_ips": ["203.0.113.10", "10.0.0.0/24"],
+        }))
+        .expect("present allowed_ips should deserialize");
+        assert_eq!(
+            updated.allowed_ips,
+            Some(Some(vec![
+                "203.0.113.10".to_string(),
+                "10.0.0.0/24".to_string(),
+            ])),
+        );
+    }
 }

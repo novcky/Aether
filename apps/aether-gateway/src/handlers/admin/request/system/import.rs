@@ -2558,6 +2558,7 @@ impl<'a> AdminAppState<'a> {
                                         } else {
                                             None
                                         },
+                                        allowed_ips: None,
                                     },
                                 )
                                 .await?;
@@ -2626,6 +2627,7 @@ impl<'a> AdminAppState<'a> {
                         allowed_providers,
                         allowed_api_formats,
                         allowed_models,
+                        allowed_ips: None,
                         rate_limit,
                         concurrent_limit,
                         force_capabilities,
@@ -2781,6 +2783,7 @@ impl<'a> AdminAppState<'a> {
                                     allowed_providers: Some(allowed_providers.clone()),
                                     allowed_api_formats: Some(allowed_api_formats.clone()),
                                     allowed_models: Some(allowed_models.clone()),
+                                    allowed_ips: None,
                                     expires_at_present: false,
                                     expires_at_unix_secs: None,
                                     auto_delete_on_expiry_present: false,
@@ -2841,6 +2844,7 @@ impl<'a> AdminAppState<'a> {
                         allowed_providers,
                         allowed_api_formats,
                         allowed_models,
+                        allowed_ips: None,
                         rate_limit: Some(rate_limit),
                         concurrent_limit,
                         force_capabilities,
