@@ -2746,6 +2746,11 @@ async fn execute_stream_from_frame_stream(
                     image_stream_total_timeout.as_mut()
                 {
                     tokio::select! {
+                        biased;
+                        _ = tx.closed(), if client_visible_stream_completed => {
+                            downstream_dropped = true;
+                            break;
+                        }
                         result = next_stream_frame(&mut buffered_frames, &mut lines) => result,
                         _ = timeout_sleep.as_mut() => {
                             let timeout_ms = openai_image_stream_total_timeout_ms
@@ -2797,7 +2802,14 @@ async fn execute_stream_from_frame_stream(
                         }
                     }
                 } else {
-                    next_stream_frame(&mut buffered_frames, &mut lines).await
+                    tokio::select! {
+                        biased;
+                        _ = tx.closed(), if client_visible_stream_completed => {
+                            downstream_dropped = true;
+                            break;
+                        }
+                        result = next_stream_frame(&mut buffered_frames, &mut lines) => result,
+                    }
                 };
                 let next_frame = match next_frame_result {
                     Ok(frame) => frame,

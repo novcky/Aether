@@ -532,14 +532,14 @@ fn maybe_insert_default_codex_header(
     provider_request_headers.insert(header_name.to_string(), header_value.to_string());
 }
 
-fn maybe_inject_codex_prompt_cache_key(
-    provider_request_body: &mut Value,
+fn codex_prompt_cache_key_to_insert(
+    provider_request_body: &Value,
     provider_type: &str,
     provider_api_format: &str,
     user_api_key_id: Option<&str>,
-) {
+) -> Option<String> {
     if !is_codex_openai_responses_request(provider_type, provider_api_format) {
-        return;
+        return None;
     }
 
     let existing = provider_request_body
@@ -548,10 +548,10 @@ fn maybe_inject_codex_prompt_cache_key(
         .map(str::trim)
         .unwrap_or_default();
     if !existing.is_empty() {
-        return;
+        return None;
     }
 
-    let prompt_cache_key = extract_codex_prompt_cache_session_seed(provider_request_body)
+    extract_codex_prompt_cache_session_seed(provider_request_body)
         .and_then(|seed| build_stable_codex_prompt_cache_key_from_seed("session", &seed))
         .or_else(|| {
             extract_codex_prompt_cache_control_seed(provider_request_body)
@@ -561,7 +561,13 @@ fn maybe_inject_codex_prompt_cache_key(
             extract_codex_stable_request_prompt_cache_seed(provider_request_body, user_api_key_id)
                 .and_then(|seed| build_stable_codex_prompt_cache_key_from_seed("request", &seed))
         })
-        .or_else(|| user_api_key_id.and_then(build_stable_codex_prompt_cache_key));
+        .or_else(|| user_api_key_id.and_then(build_stable_codex_prompt_cache_key))
+}
+
+fn insert_codex_prompt_cache_key(
+    provider_request_body: &mut Value,
+    prompt_cache_key: Option<String>,
+) {
     let Some(prompt_cache_key) = prompt_cache_key else {
         return;
     };
@@ -712,7 +718,7 @@ pub fn apply_codex_openai_responses_special_body_edits(
         return;
     }
 
-    maybe_inject_codex_prompt_cache_key(
+    let prompt_cache_key = codex_prompt_cache_key_to_insert(
         provider_request_body,
         provider_type,
         provider_api_format,
@@ -766,6 +772,8 @@ pub fn apply_codex_openai_responses_special_body_edits(
         apply_codex_openai_image_tool_overrides(body_object);
         inject_codex_default_variation_prompt(body_object);
     }
+
+    insert_codex_prompt_cache_key(provider_request_body, prompt_cache_key);
 }
 
 pub fn apply_codex_openai_responses_chat_body_edits(
@@ -790,6 +798,9 @@ pub fn apply_codex_openai_responses_chat_body_edits(
         return;
     };
     ensure_codex_chat_reasoning_defaults(body_object, provider_api_format, body_rules);
+    if let Some(prompt_cache_key) = body_object.remove("prompt_cache_key") {
+        body_object.insert("prompt_cache_key".to_string(), prompt_cache_key);
+    }
 }
 
 pub fn apply_codex_openai_responses_special_headers(
