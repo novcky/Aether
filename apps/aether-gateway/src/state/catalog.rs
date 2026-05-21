@@ -615,6 +615,21 @@ impl AppState {
         Ok(updated)
     }
 
+    pub(crate) async fn update_provider_catalog_key_runtime_state(
+        &self,
+        key: &provider_catalog::StoredProviderCatalogKey,
+    ) -> Result<Option<provider_catalog::StoredProviderCatalogKey>, GatewayError> {
+        let updated = self
+            .data
+            .update_provider_catalog_key(key)
+            .await
+            .map_err(|err| GatewayError::Internal(err.to_string()))?;
+        if updated.is_some() {
+            self.invalidate_provider_health_routing_caches();
+        }
+        Ok(updated)
+    }
+
     pub(crate) async fn update_provider_catalog_key_upstream_metadata(
         &self,
         key_id: &str,
