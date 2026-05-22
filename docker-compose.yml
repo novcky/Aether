@@ -22,10 +22,10 @@ services:
       -c shared_preload_libraries=pg_stat_statements
       -c pg_stat_statements.track=all
       -c pg_stat_statements.max=10000
-      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-256MB}
-      -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-768MB}
-      -c work_mem=${POSTGRES_WORK_MEM:-4MB}
-      -c maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-64MB}
+      -c shared_buffers=${POSTGRES_SHARED_BUFFERS:-1GB}
+      -c effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-3GB}
+      -c work_mem=${POSTGRES_WORK_MEM:-16MB}
+      -c maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-256MB}
     healthcheck:
       test: [ "CMD-SHELL", "pg_isready -U postgres" ]
       interval: 5s
@@ -36,7 +36,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: aether-redis
-    command: redis-server --appendonly yes --appendfsync everysec --save 60 1000 --requirepass ${REDIS_PASSWORD}
+    command: redis-server --appendonly yes --appendfsync everysec --save 60 1000 --requirepass ${REDIS_PASSWORD} --maxclients ${REDIS_MAXCLIENTS:-10000}
     volumes:
       - redis_data:/data
     ports:

@@ -23,6 +23,7 @@ use crate::handlers::admin::system::shared::update::{
     read_update_history, read_update_task_status, start_admin_system_rollback_task,
     start_admin_system_update_task,
 };
+use crate::important_notification::build_important_notification_test_payload;
 use crate::maintenance::{ManualUsageCleanupMode, ManualUsageCleanupOptions};
 use crate::GatewayError;
 use aether_data_contracts::repository::usage::UsageCleanupTargets;
@@ -362,6 +363,16 @@ pub(super) async fn maybe_build_local_admin_core_system_response(
     {
         return Ok(Some(
             Json(build_admin_smtp_test_payload(state, request_body).await?).into_response(),
+        ));
+    }
+
+    if decision.route_kind.as_deref() == Some("important_notification_test")
+        && request_method == http::Method::POST
+        && request_path == "/api/admin/system/important-notification/test"
+    {
+        return Ok(Some(
+            Json(build_important_notification_test_payload(state, request_body).await?)
+                .into_response(),
         ));
     }
 
