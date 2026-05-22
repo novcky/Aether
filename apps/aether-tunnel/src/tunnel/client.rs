@@ -61,6 +61,7 @@ pub async fn connect_and_run(
     );
     let node_id = server.node_id.read().unwrap().clone();
     headers.insert("X-Node-Id", http::HeaderValue::from_str(&node_id)?);
+    let security_session = uuid::Uuid::new_v4().simple().to_string();
     if server.tunnel_security == crate::config::TunnelSecurity::NonTlsRequired {
         headers.insert(
             TUNNEL_SECURITY_HEADER,
@@ -68,7 +69,7 @@ pub async fn connect_and_run(
         );
         headers.insert(
             TUNNEL_SECURITY_SESSION_HEADER,
-            http::HeaderValue::from_str(&node_id)?,
+            http::HeaderValue::from_str(&security_session)?,
         );
     }
     // Use dynamic node_name (may be updated by remote config) instead of
@@ -142,7 +143,7 @@ pub async fn connect_and_run(
             .ok_or_else(|| anyhow::anyhow!("secure tunnel requires tunnel_encryption_key"))?;
         Some(Arc::new(SecureFrameCodec::new(
             key,
-            &node_id,
+            &security_session,
             TunnelSecurityRole::Client,
         )?))
     } else {

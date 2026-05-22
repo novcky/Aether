@@ -16,7 +16,7 @@ const INSTALL_SESSION_TTL_SECS: u64 = 15 * 60;
 const INSTALL_SESSION_KEY_PREFIX: &str = "install:session:";
 const TUNNEL_INSTALL_SESSION_KEY_PREFIX: &str = "tunnel-install:session:";
 const TUNNEL_INSTALL_UNIX_SCRIPT_URL: &str =
-    "https://raw.githubusercontent.com/fawney19/Aether/main/apps/aether-tunnel/install.sh";
+    "https://raw.githubusercontent.com/fawney19/Aether/refs/heads/main/apps/aether-tunnel/install.sh";
 const TUNNEL_INSTALL_POWERSHELL_SCRIPT_URL: &str =
     "https://raw.githubusercontent.com/fawney19/Aether/main/apps/aether-tunnel/install.ps1";
 
@@ -95,8 +95,7 @@ fn install_code_from_path(request_path: &str) -> Option<(String, bool)> {
 
 fn tunnel_install_code_from_path(request_path: &str) -> Option<(String, bool)> {
     let raw = request_path
-        .strip_prefix("/install-tunnel/")
-        .or_else(|| request_path.strip_prefix("/install-proxy/"))?
+        .strip_prefix("/install-tunnel/")?
         .trim()
         .trim_matches('/');
     if raw.is_empty() || raw.contains('/') {
@@ -735,9 +734,7 @@ pub(super) async fn maybe_build_local_install_response(
     if decision.route_family.as_deref() != Some("install") {
         return None;
     }
-    if request_context.request_path.starts_with("/install-tunnel/")
-        || request_context.request_path.starts_with("/install-proxy/")
-    {
+    if request_context.request_path.starts_with("/install-tunnel/") {
         return Some(maybe_build_local_tunnel_install_response(state, request_context).await);
     }
     let Some((code, wants_powershell)) = install_code_from_path(&request_context.request_path)
@@ -932,10 +929,6 @@ mod tests {
             tunnel_install_code_from_path("/install-tunnel/abc123.ps1"),
             Some(("abc123".to_string(), true))
         );
-        assert_eq!(
-            tunnel_install_code_from_path("/install-proxy/abc123"),
-            Some(("abc123".to_string(), false))
-        );
         assert_eq!(tunnel_install_code_from_path("/install-tunnel/a/b"), None);
     }
 
@@ -949,7 +942,7 @@ mod tests {
         assert!(script.contains("export AETHER_TUNNEL_SECURITY='non_tls_required'"));
         assert!(script.contains("export AETHER_TUNNEL_ENCRYPTION_KEY='base64-32-bytes'"));
         assert!(script.contains(
-            "https://raw.githubusercontent.com/fawney19/Aether/main/apps/aether-tunnel/install.sh"
+            "https://raw.githubusercontent.com/fawney19/Aether/refs/heads/main/apps/aether-tunnel/install.sh"
         ));
         assert!(!script.contains("aether-rust-pioneer"));
         assert!(!script.contains("[[servers]]"));

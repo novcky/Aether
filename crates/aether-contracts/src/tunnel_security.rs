@@ -242,4 +242,25 @@ mod tests {
             Err(TunnelSecurityError::Decrypt)
         ));
     }
+
+    #[test]
+    fn secure_frame_uses_session_in_key_derivation() {
+        let session_a = "node-1:connection-a";
+        let session_b = "node-1:connection-b";
+        let client_a = SecureFrameCodec::new(&test_key(), session_a, TunnelSecurityRole::Client)
+            .expect("client codec a");
+        let client_b = SecureFrameCodec::new(&test_key(), session_b, TunnelSecurityRole::Client)
+            .expect("client codec b");
+        let frame = Frame::new(
+            7,
+            MsgType::RequestBody,
+            0,
+            Bytes::from_static(b"same payload"),
+        );
+
+        let encrypted_a = client_a.encrypt_frame(frame.clone()).expect("encrypt a");
+        let encrypted_b = client_b.encrypt_frame(frame).expect("encrypt b");
+
+        assert_ne!(encrypted_a, encrypted_b);
+    }
 }

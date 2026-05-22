@@ -264,18 +264,23 @@ pub async fn ws_proxy(
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or(node_id.as_str())
-        .to_string();
+        .map(str::to_string);
 
     if node_id.is_empty() {
         warn!("proxy connection rejected: missing X-Node-ID header");
         return axum::http::StatusCode::BAD_REQUEST.into_response();
     }
     let stored_security_key = state.secure_tunnel_key_for_node(&node_id).await;
-    let security_key = match tunnel_security.as_deref() {
+    let (security_key, security_session) = match tunnel_security.as_deref() {
         Some(aether_contracts::tunnel_security::TUNNEL_SECURITY_NON_TLS_REQUIRED) => {
             match stored_security_key {
-                Some(key) => Some(key),
+                Some(key) => {
+                    let Some(session) = security_session else {
+                        warn!(node_id = %node_id, "secure tunnel requested without a security session");
+                        return axum::http::StatusCode::BAD_REQUEST.into_response();
+                    };
+                    (Some(key), session)
+                }
                 None => {
                     warn!(node_id = %node_id, "secure tunnel requested but no PSK is registered");
                     return axum::http::StatusCode::UNAUTHORIZED.into_response();
@@ -287,7 +292,7 @@ pub async fn ws_proxy(
             warn!(node_id = %node_id, "proxy connection rejected: stored secure tunnel key requires encrypted frames");
             return axum::http::StatusCode::UNAUTHORIZED.into_response();
         }
-        None => None,
+        None => (None, String::new()),
     };
 
     let request_permit = match state.try_acquire_request_permit().await {
