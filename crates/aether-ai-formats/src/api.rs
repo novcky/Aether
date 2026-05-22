@@ -175,6 +175,7 @@ pub use crate::formats::{
             build_local_openai_chat_request_body_with_model_directives,
             build_local_openai_responses_request_body,
             build_local_openai_responses_request_body_with_model_directives,
+            is_claude_messages_shaped_body_on_openai_chat_endpoint,
         },
     },
 };

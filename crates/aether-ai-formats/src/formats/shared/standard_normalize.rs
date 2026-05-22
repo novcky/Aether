@@ -5,7 +5,7 @@ use aether_ai_formats::formats::conversion::request::{
     convert_openai_chat_request_to_openai_responses_request,
     normalize_openai_responses_request_to_openai_chat_request,
 };
-use aether_ai_formats::{request_conversion_kind, RequestConversionKind};
+use aether_ai_formats::{request_conversion_kind, FormatContext, RequestConversionKind};
 use serde_json::{json, Value};
 
 use crate::formats::shared::model_directives::apply_model_directive_overrides_from_request;
@@ -14,6 +14,44 @@ fn is_responses_shaped_body_on_chat_endpoint(body_json: &Value) -> bool {
     body_json
         .as_object()
         .is_some_and(|object| !object.contains_key("messages") && object.contains_key("input"))
+}
+
+pub fn is_claude_messages_shaped_body_on_openai_chat_endpoint(body_json: &Value) -> bool {
+    let Some(request) = body_json.as_object() else {
+        return false;
+    };
+    if !request.contains_key("messages") {
+        return false;
+    }
+    request
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| tools.iter().any(is_claude_native_tool_definition))
+        || request
+            .get("messages")
+            .and_then(Value::as_array)
+            .is_some_and(|messages| messages.iter().any(message_has_claude_tool_block))
+}
+
+fn is_claude_native_tool_definition(tool: &Value) -> bool {
+    tool.as_object().is_some_and(|tool_object| {
+        tool_object.contains_key("input_schema") && !tool_object.contains_key("function")
+    })
+}
+
+fn message_has_claude_tool_block(message: &Value) -> bool {
+    message
+        .as_object()
+        .and_then(|object| object.get("content"))
+        .and_then(Value::as_array)
+        .is_some_and(|parts| parts.iter().any(is_claude_tool_content_block))
+}
+
+fn is_claude_tool_content_block(part: &Value) -> bool {
+    part.as_object()
+        .and_then(|object| object.get("type"))
+        .and_then(Value::as_str)
+        .is_some_and(|block_type| matches!(block_type, "tool_use" | "tool_result"))
 }
 
 fn chat_compatible_body_for_openai_chat_endpoint(body_json: &Value) -> Option<Cow<'_, Value>> {
@@ -112,12 +150,21 @@ pub fn build_cross_format_openai_chat_request_body_with_model_directives(
     let conversion_kind = request_conversion_kind("openai:chat", provider_api_format)?;
     let provider_request_body = match conversion_kind {
         RequestConversionKind::ToClaudeStandard => {
-            let chat_body = chat_compatible_body_for_openai_chat_endpoint(body_json)?;
-            convert_openai_chat_request_to_claude_request(
-                chat_body.as_ref(),
-                mapped_model,
-                upstream_is_stream,
-            )?
+            if is_claude_messages_shaped_body_on_openai_chat_endpoint(body_json) {
+                convert_claude_compatible_chat_endpoint_request(
+                    body_json,
+                    mapped_model,
+                    provider_api_format,
+                    upstream_is_stream,
+                )?
+            } else {
+                let chat_body = chat_compatible_body_for_openai_chat_endpoint(body_json)?;
+                convert_openai_chat_request_to_claude_request(
+                    chat_body.as_ref(),
+                    mapped_model,
+                    upstream_is_stream,
+                )?
+            }
         }
         RequestConversionKind::ToGeminiStandard => {
             let chat_body = chat_compatible_body_for_openai_chat_endpoint(body_json)?;
@@ -164,6 +211,23 @@ pub fn build_cross_format_openai_chat_request_body_with_model_directives(
         require_body_stream_field,
     );
     Some(provider_request_body)
+}
+
+fn convert_claude_compatible_chat_endpoint_request(
+    body_json: &Value,
+    mapped_model: &str,
+    provider_api_format: &str,
+    upstream_is_stream: bool,
+) -> Option<Value> {
+    aether_ai_formats::convert_request(
+        "claude:messages",
+        provider_api_format,
+        body_json,
+        &FormatContext::default()
+            .with_mapped_model(mapped_model)
+            .with_upstream_stream(upstream_is_stream),
+    )
+    .ok()
 }
 
 pub fn build_local_openai_responses_request_body(
@@ -708,5 +772,70 @@ mod tests {
             true
         );
         assert_eq!(provider_request_body["stream_options"]["extra"], "keep-me");
+    }
+
+    #[test]
+    fn cross_format_openai_chat_request_body_accepts_claude_native_messages_for_claude_target() {
+        let body_json = json!({
+            "model": "deepseek-v4-flash",
+            "messages": [
+                {"role": "user", "content": "lookup"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "checking"},
+                        {
+                            "type": "tool_use",
+                            "id": "call_1",
+                            "name": "lookup",
+                            "input": {"q": "db"}
+                        }
+                    ]
+                },
+                {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "call_1",
+                        "content": {"rows": 1}
+                    }]
+                }
+            ],
+            "tools": [{
+                "name": "lookup",
+                "description": "Lookup data",
+                "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}}
+            }],
+            "tool_choice": {"type": "auto"},
+            "max_tokens": 128,
+            "stream": true
+        });
+
+        let provider_request_body =
+            build_cross_format_openai_chat_request_body_with_model_directives(
+                &body_json,
+                "claude-sonnet-4-5",
+                "claude:messages",
+                true,
+                false,
+            )
+            .expect("claude-native chat endpoint body should build as claude messages");
+
+        assert_eq!(provider_request_body["model"], "claude-sonnet-4-5");
+        assert_eq!(provider_request_body["tools"][0]["name"], "lookup");
+        assert_eq!(
+            provider_request_body["tools"][0]["input_schema"]["properties"]["q"]["type"],
+            "string"
+        );
+        assert_eq!(
+            provider_request_body["messages"][1]["content"][1]["type"],
+            "tool_use"
+        );
+        assert_eq!(
+            provider_request_body["messages"][2]["content"][0]["type"],
+            "tool_result"
+        );
+        assert_eq!(provider_request_body["tool_choice"]["type"], "auto");
+        assert_eq!(provider_request_body["stream"], true);
     }
 }
