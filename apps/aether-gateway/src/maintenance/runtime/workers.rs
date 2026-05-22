@@ -1,7 +1,8 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use chrono::Utc;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::data::GatewayDataState;
 use crate::AppState;
@@ -44,6 +45,37 @@ fn log_maintenance_worker_failure(
         error = ?error,
         "gateway maintenance worker failed"
     );
+}
+
+fn should_defer_for_database_pressure(
+    data: &GatewayDataState,
+    worker: &'static str,
+    deferred_since: &mut Option<Instant>,
+) -> bool {
+    let Some(summary) = data.database_pool_summary() else {
+        *deferred_since = None;
+        return false;
+    };
+    if !GatewayDataState::should_defer_maintenance_for_pool_pressure_state(
+        GatewayDataState::database_pool_summary_under_maintenance_pressure(&summary),
+        deferred_since,
+    ) {
+        return false;
+    }
+
+    debug!(
+        event_name = "maintenance_worker_deferred",
+        log_type = "ops",
+        worker,
+        driver = %summary.driver,
+        checked_out = summary.checked_out,
+        pool_size = summary.pool_size,
+        idle = summary.idle,
+        max_connections = summary.max_connections,
+        usage_rate = summary.usage_rate,
+        "gateway maintenance worker deferred because database pool has no idle reserve"
+    );
+    true
 }
 
 pub(crate) fn spawn_audit_cleanup_worker(
@@ -177,8 +209,19 @@ pub(crate) fn spawn_usage_counter_flush_worker(
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
         let mut last_delta_cleanup = tokio::time::Instant::now();
+        let mut usage_counter_flush_deferred_since = None;
+        let mut usage_counter_delta_cleanup_deferred_since = None;
 
         loop {
+            if should_defer_for_database_pressure(
+                &data,
+                "usage_counter_flush",
+                &mut usage_counter_flush_deferred_since,
+            ) {
+                interval.tick().await;
+                continue;
+            }
+
             let mut batches = 0_usize;
             while batches < USAGE_COUNTER_FLUSH_CATCH_UP_BURST_LIMIT {
                 match run_usage_counter_flush_once(&data, USAGE_COUNTER_FLUSH_BATCH_SIZE).await {
@@ -197,7 +240,18 @@ pub(crate) fn spawn_usage_counter_flush_worker(
             }
 
             if last_delta_cleanup.elapsed() >= USAGE_COUNTER_DELTA_CLEANUP_INTERVAL {
-                if let Err(err) = cleanup_processed_usage_counter_deltas_once(
+                if should_defer_for_database_pressure(
+                    &data,
+                    "usage_counter_delta_cleanup",
+                    &mut usage_counter_delta_cleanup_deferred_since,
+                ) {
+                    debug!(
+                        event_name = "maintenance_worker_deferred",
+                        log_type = "ops",
+                        worker = "usage_counter_delta_cleanup",
+                        "gateway maintenance worker deferred cleanup under database pressure"
+                    );
+                } else if let Err(err) = cleanup_processed_usage_counter_deltas_once(
                     &data,
                     USAGE_COUNTER_DELTA_RETENTION_SECS,
                     USAGE_COUNTER_DELTA_CLEANUP_BATCH_SIZE,
@@ -265,8 +319,16 @@ pub(crate) fn spawn_provider_quota_alert_worker(
         let mut interval = tokio::time::interval(PROVIDER_QUOTA_ALERT_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
+        let mut deferred_since = None;
         loop {
             interval.tick().await;
+            if should_defer_for_database_pressure(
+                &state.data,
+                "provider_quota_alert",
+                &mut deferred_since,
+            ) {
+                continue;
+            }
             if let Err(err) = perform_provider_quota_alert_once(&state).await {
                 log_maintenance_worker_failure("provider_quota_alert", "tick", &err);
             }
@@ -288,8 +350,16 @@ pub(crate) fn spawn_oauth_token_refresh_worker(
         let mut interval = tokio::time::interval(OAUTH_TOKEN_REFRESH_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
+        let mut deferred_since = None;
         loop {
             interval.tick().await;
+            if should_defer_for_database_pressure(
+                &state.data,
+                "oauth_token_refresh",
+                &mut deferred_since,
+            ) {
+                continue;
+            }
             if let Err(err) = perform_oauth_token_refresh_once(&state).await {
                 log_maintenance_worker_failure("oauth_token_refresh", "tick", &err);
             }
@@ -334,8 +404,12 @@ pub(crate) fn spawn_pending_cleanup_worker(
         let mut interval = tokio::time::interval(PENDING_CLEANUP_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
+        let mut deferred_since = None;
         loop {
             interval.tick().await;
+            if should_defer_for_database_pressure(&data, "pending_cleanup", &mut deferred_since) {
+                continue;
+            }
             if let Err(err) = run_pending_cleanup_once(&data).await {
                 log_maintenance_worker_failure("pending_cleanup", "tick", &err);
             }
@@ -357,8 +431,16 @@ pub(crate) fn spawn_proxy_node_stale_cleanup_worker(
         let mut interval = tokio::time::interval(PROXY_NODE_STALE_SWEEP_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
+        let mut deferred_since = None;
         loop {
             interval.tick().await;
+            if should_defer_for_database_pressure(
+                &data,
+                "proxy_node_stale_cleanup",
+                &mut deferred_since,
+            ) {
+                continue;
+            }
             if let Err(err) = run_proxy_node_stale_cleanup_once(&data).await {
                 log_maintenance_worker_failure("proxy_node_stale_cleanup", "tick", &err);
             }
@@ -407,8 +489,16 @@ pub(crate) fn spawn_proxy_upgrade_rollout_worker(
         let mut interval = tokio::time::interval(PROXY_UPGRADE_ROLLOUT_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         interval.tick().await;
+        let mut deferred_since = None;
         loop {
             interval.tick().await;
+            if should_defer_for_database_pressure(
+                &state.data,
+                "proxy_upgrade_rollout",
+                &mut deferred_since,
+            ) {
+                continue;
+            }
             if let Err(err) = run_proxy_upgrade_rollout_once(&state).await {
                 log_maintenance_worker_failure("proxy_upgrade_rollout", "tick", &err);
             }
