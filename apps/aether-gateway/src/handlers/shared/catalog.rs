@@ -442,11 +442,47 @@ fn chatgpt_web_image_quota_limit(
         .get("image_quota_total")
         .and_then(admin_provider_quota_pure::coerce_json_f64)
         .filter(|value| *value > 0.0);
+    let plan_type = metadata
+        .get("plan_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase());
+    let limit_source = metadata
+        .get("image_quota_limit_source")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     if let Some(limit) = explicit_limit {
-        return Some(limit);
+        if !chatgpt_web_image_quota_limit_is_legacy_free_default(
+            limit,
+            limit_source,
+            plan_type.as_deref(),
+            remaining,
+        ) {
+            return Some(limit);
+        }
     }
 
     remaining.filter(|value| *value > 0.0)
+}
+
+fn chatgpt_web_image_quota_limit_is_legacy_free_default(
+    limit: f64,
+    limit_source: Option<&str>,
+    plan_type: Option<&str>,
+    remaining: Option<f64>,
+) -> bool {
+    let plan_type_is_free = plan_type
+        .map(str::trim)
+        .is_some_and(|value| value.eq_ignore_ascii_case("free"));
+    if !plan_type_is_free || limit_source.is_some() {
+        return false;
+    }
+    if (limit - 25.0).abs() > f64::EPSILON {
+        return false;
+    }
+    remaining.is_some_and(|value| value < limit)
 }
 
 fn model_quota_window_snapshot(
@@ -2531,6 +2567,33 @@ mod tests {
         assert_eq!(window.get("limit_value"), Some(&json!(24.0)));
         assert_eq!(window.get("used_value"), Some(&json!(0.0)));
         assert_eq!(window.get("remaining_ratio"), Some(&json!(1.0)));
+    }
+
+    #[test]
+    fn provider_key_status_snapshot_payload_ignores_chatgpt_web_legacy_free_25_limit() {
+        let mut key = sample_catalog_key();
+        key.upstream_metadata = Some(json!({
+            "chatgpt_web": {
+                "updated_at": 1_778_067_246u64,
+                "plan_type": "free",
+                "image_quota_remaining": 19.0,
+                "image_quota_total": 25.0
+            }
+        }));
+
+        let payload = provider_key_status_snapshot_payload(&key, "chatgpt_web");
+        let window = payload
+            .get("quota")
+            .and_then(Value::as_object)
+            .and_then(|quota| quota.get("windows"))
+            .and_then(Value::as_array)
+            .and_then(|windows| windows.first())
+            .and_then(Value::as_object)
+            .expect("image quota window should exist");
+
+        assert_eq!(window.get("remaining_value"), Some(&json!(19.0)));
+        assert_eq!(window.get("limit_value"), Some(&json!(19.0)));
+        assert_eq!(window.get("used_value"), Some(&json!(0.0)));
     }
 
     #[test]

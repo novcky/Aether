@@ -181,8 +181,6 @@ pub fn normalize_chatgpt_web_image_quota_limit(
     };
 
     let remaining = provider_pool_json_f64(object.get("image_quota_remaining"));
-    let explicit_limit =
-        provider_pool_json_f64(object.get("image_quota_total")).filter(|value| *value > 0.0);
     let plan_type = chatgpt_web_image_quota_plan_type(object)
         .map(ToOwned::to_owned)
         .or_else(|| {
@@ -190,6 +188,16 @@ pub fn normalize_chatgpt_web_image_quota_limit(
                 .as_ref()
                 .and_then(|existing| existing.plan_type.clone())
         });
+    let raw_explicit_limit =
+        provider_pool_json_f64(object.get("image_quota_total")).filter(|value| *value > 0.0);
+    let explicit_limit_is_free_default = raw_explicit_limit.is_some_and(|limit| {
+        is_legacy_chatgpt_web_free_default_limit_value(limit, None, plan_type.as_deref(), remaining)
+    });
+    if explicit_limit_is_free_default {
+        object.remove("image_quota_total");
+        object.remove("image_quota_limit_source");
+    }
+    let explicit_limit = raw_explicit_limit.filter(|_| !explicit_limit_is_free_default);
     let limit = explicit_limit
         .map(|limit| ChatGptWebImageQuotaLimit {
             value: limit,
@@ -294,16 +302,30 @@ fn is_legacy_chatgpt_web_free_default_limit(
     plan_type: Option<&str>,
     remaining: Option<f64>,
 ) -> bool {
+    is_legacy_chatgpt_web_free_default_limit_value(
+        existing_limit.value,
+        existing_limit.source.as_deref(),
+        plan_type,
+        remaining,
+    )
+}
+
+fn is_legacy_chatgpt_web_free_default_limit_value(
+    value: f64,
+    source: Option<&str>,
+    plan_type: Option<&str>,
+    remaining: Option<f64>,
+) -> bool {
     let plan_type_is_free = plan_type
         .map(str::trim)
         .is_some_and(|value| value.eq_ignore_ascii_case("free"));
-    if !plan_type_is_free || existing_limit.source.is_some() {
+    if !plan_type_is_free || source.is_some() {
         return false;
     }
-    if (existing_limit.value - 25.0).abs() > f64::EPSILON {
+    if (value - 25.0).abs() > f64::EPSILON {
         return false;
     }
-    remaining.is_some_and(|remaining| remaining < existing_limit.value)
+    remaining.is_some_and(|remaining| remaining < value)
 }
 
 pub(crate) fn quota_exhausted_from_bucket(bucket: &Map<String, Value>) -> bool {

@@ -277,6 +277,23 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_web_quota_metadata_ignores_upstream_free_25_default() {
+        let mut metadata = json!({
+            "plan_type": "free",
+            "image_quota_remaining": 19,
+            "image_quota_total": 25,
+        });
+        normalize_chatgpt_web_image_quota_limit(&mut metadata, None);
+
+        assert_eq!(metadata["image_quota_total"], json!(19.0));
+        assert_eq!(metadata["image_quota_used"], json!(0.0));
+        assert_eq!(
+            metadata["image_quota_limit_source"],
+            json!("first_remaining")
+        );
+    }
+
+    #[test]
     fn chatgpt_web_quota_metadata_preserves_marked_free_first_limit() {
         let mut metadata = json!({
             "plan_type": "free",

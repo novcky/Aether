@@ -130,6 +130,17 @@ pub(crate) async fn maybe_execute_chatgpt_web_image_stream(
     }))
 }
 
+pub(crate) async fn maybe_apply_chatgpt_web_image_quota_request_delta_at_candidate_start(
+    state: &AppState,
+    plan: &ExecutionPlan,
+    report_context: Option<&Value>,
+) {
+    if !is_chatgpt_web_image_plan(plan, report_context) {
+        return;
+    }
+    apply_chatgpt_web_image_quota_request_delta_at_start(state, plan).await;
+}
+
 fn is_chatgpt_web_image_plan(plan: &ExecutionPlan, report_context: Option<&Value>) -> bool {
     if !plan
         .provider_api_format
@@ -1062,10 +1073,12 @@ async fn apply_chatgpt_web_image_quota_request_delta(
         .unwrap_or_default();
 
     let now_unix_secs = current_unix_secs();
+    let request_dedup_key = chatgpt_web_image_quota_request_delta_dedup_key(plan);
     if !apply_chatgpt_web_image_quota_request_delta_to_metadata(
         &mut metadata,
         latest_key.status_snapshot.as_ref(),
         now_unix_secs,
+        request_dedup_key.as_deref(),
     ) {
         return Ok(false);
     }
@@ -1097,7 +1110,21 @@ fn apply_chatgpt_web_image_quota_request_delta_to_metadata(
     metadata: &mut Map<String, Value>,
     status_snapshot: Option<&Value>,
     now_unix_secs: u64,
+    request_dedup_key: Option<&str>,
 ) -> bool {
+    let request_dedup_key = request_dedup_key
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(request_dedup_key) = request_dedup_key {
+        if metadata
+            .get("image_quota_last_local_request_key")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == request_dedup_key)
+        {
+            return false;
+        }
+    }
+
     let snapshot_window = chatgpt_web_image_quota_snapshot_window(status_snapshot);
     let metadata_limit =
         chatgpt_web_image_quota_f64(metadata.get("image_quota_total")).filter(|value| *value > 0.0);
@@ -1163,6 +1190,12 @@ fn apply_chatgpt_web_image_quota_request_delta_to_metadata(
         "image_quota_last_local_request_at".to_string(),
         json!(now_unix_secs),
     );
+    if let Some(request_dedup_key) = request_dedup_key {
+        metadata.insert(
+            "image_quota_last_local_request_key".to_string(),
+            json!(request_dedup_key),
+        );
+    }
     let local_request_count =
         chatgpt_web_image_quota_u64(metadata.get("image_quota_local_request_count")).unwrap_or(0);
     metadata.insert(
@@ -1170,6 +1203,22 @@ fn apply_chatgpt_web_image_quota_request_delta_to_metadata(
         json!(local_request_count.saturating_add(1)),
     );
     true
+}
+
+fn chatgpt_web_image_quota_request_delta_dedup_key(plan: &ExecutionPlan) -> Option<String> {
+    let request_id = plan.request_id.trim();
+    if request_id.is_empty() {
+        return None;
+    }
+    let candidate_id = plan
+        .candidate_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    Some(match candidate_id {
+        Some(candidate_id) => format!("{request_id}:{candidate_id}"),
+        None => request_id.to_string(),
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -2754,6 +2803,7 @@ mod tests {
             &mut metadata,
             None,
             1_000,
+            None,
         ));
 
         assert_eq!(metadata["image_quota_remaining"], json!(24.0));
@@ -2783,6 +2833,7 @@ mod tests {
             &mut metadata,
             Some(&status_snapshot),
             1_000,
+            None,
         ));
 
         assert_eq!(metadata["image_quota_remaining"], json!(18.0));
@@ -2804,6 +2855,7 @@ mod tests {
             &mut metadata,
             None,
             1_000,
+            None,
         ));
 
         assert_eq!(metadata["image_quota_remaining"], json!(18.0));
@@ -2812,6 +2864,44 @@ mod tests {
         assert_eq!(
             metadata["image_quota_limit_source"],
             json!("first_remaining")
+        );
+    }
+
+    #[test]
+    fn chatgpt_web_image_quota_request_delta_dedupes_same_candidate_start() {
+        let mut metadata = Map::from_iter([
+            ("plan_type".to_string(), json!("free")),
+            ("image_quota_remaining".to_string(), json!(25.0)),
+            ("image_quota_total".to_string(), json!(25.0)),
+            ("image_quota_used".to_string(), json!(0.0)),
+        ]);
+
+        assert!(apply_chatgpt_web_image_quota_request_delta_to_metadata(
+            &mut metadata,
+            None,
+            1_000,
+            Some("request-1:candidate-1"),
+        ));
+        assert!(!apply_chatgpt_web_image_quota_request_delta_to_metadata(
+            &mut metadata,
+            None,
+            1_001,
+            Some("request-1:candidate-1"),
+        ));
+        assert!(apply_chatgpt_web_image_quota_request_delta_to_metadata(
+            &mut metadata,
+            None,
+            1_002,
+            Some("request-1:candidate-2"),
+        ));
+
+        assert_eq!(metadata["image_quota_remaining"], json!(23.0));
+        assert_eq!(metadata["image_quota_total"], json!(25.0));
+        assert_eq!(metadata["image_quota_used"], json!(2.0));
+        assert_eq!(metadata["image_quota_local_request_count"], json!(2u64));
+        assert_eq!(
+            metadata["image_quota_last_local_request_key"],
+            json!("request-1:candidate-2")
         );
     }
 
