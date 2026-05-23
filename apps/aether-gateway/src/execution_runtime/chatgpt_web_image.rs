@@ -2,12 +2,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::Error as IoError;
 use std::time::Instant;
 
+use aether_admin::provider::quota::{
+    parse_chatgpt_web_conversation_init_response, quota_refresh_success_invalid_state,
+};
 use aether_contracts::{
     ExecutionPlan, ExecutionResult, ExecutionStreamTerminalSummary, ExecutionTelemetry,
-    RequestBody, ResolvedTransportProfile, ResponseBody, StreamFrame, StreamFramePayload,
-    StreamFrameType, EXECUTION_REQUEST_ACCEPT_INVALID_CERTS_HEADER,
-    EXECUTION_REQUEST_FOLLOW_REDIRECTS_HEADER, TRANSPORT_BACKEND_BROWSER_WREQ,
-    TRANSPORT_HTTP_MODE_AUTO, TRANSPORT_POOL_SCOPE_KEY,
+    ExecutionTimeouts, ProxySnapshot, RequestBody, ResolvedTransportProfile, ResponseBody,
+    StreamFrame, StreamFramePayload, StreamFrameType,
+    EXECUTION_REQUEST_ACCEPT_INVALID_CERTS_HEADER, EXECUTION_REQUEST_FOLLOW_REDIRECTS_HEADER,
+    TRANSPORT_BACKEND_BROWSER_WREQ, TRANSPORT_HTTP_MODE_AUTO, TRANSPORT_POOL_SCOPE_KEY,
+};
+use aether_provider_pool::{
+    build_chatgpt_web_pool_quota_request, normalize_chatgpt_web_image_quota_limit,
+    ProviderPoolQuotaRequestSpec,
 };
 use axum::body::Bytes;
 use base64::Engine as _;
@@ -15,7 +22,7 @@ use chrono::{FixedOffset, Utc};
 use futures_util::stream::{self, BoxStream};
 use futures_util::StreamExt;
 use serde_json::{json, Map, Value};
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 use crate::ai_serving::api::StreamingStandardTerminalObserver;
@@ -23,6 +30,9 @@ use crate::clock::current_unix_secs;
 use crate::execution_runtime::ndjson::encode_stream_frame_ndjson;
 use crate::execution_runtime::transport::{
     DirectSyncExecutionRuntime, ExecutionRuntimeTransportError,
+};
+use crate::handlers::shared::{
+    sync_provider_key_oauth_status_snapshot, sync_provider_key_quota_status_snapshot,
 };
 use crate::AppState;
 
@@ -34,6 +44,8 @@ const CHATGPT_WEB_BUILD_NUMBER: &str = "5955942";
 const CHATGPT_WEB_SEC_CH_UA: &str =
     r#""Microsoft Edge";v="143", "Chromium";v="143", "Not A(Brand";v="24""#;
 const CHATGPT_WEB_BROWSER_PROFILE: &str = "chrome143";
+const CHATGPT_WEB_QUOTA_REFRESH_TIMEOUT_MS: u64 = 30_000;
+const CHATGPT_WEB_QUOTA_REFRESH_PROXY_TIMEOUT_MS: u64 = 60_000;
 
 pub(crate) struct ChatGptWebImageStream {
     pub(crate) frame_stream: BoxStream<'static, Result<Bytes, IoError>>,
@@ -257,6 +269,7 @@ async fn execute_chatgpt_web_image(
     let body = if let Some(failure) = summary.failure.as_ref().filter(|_| downloaded.is_empty()) {
         build_failed_sse(&request, failure)
     } else if let Some(image) = downloaded.into_iter().next() {
+        spawn_chatgpt_web_image_quota_refresh_after_success(state, plan, &base_url, token.as_str());
         build_success_sse(&request, &image, report_context)
     } else {
         build_failed_sse(
@@ -930,6 +943,230 @@ async fn execute_subrequest(
     DirectSyncExecutionRuntime::new()
         .execute_sync(&subplan)
         .await
+}
+
+fn spawn_chatgpt_web_image_quota_refresh_after_success(
+    state: &AppState,
+    plan: &ExecutionPlan,
+    base_url: &str,
+    token: &str,
+) {
+    if !state.has_provider_catalog_data_reader() || !state.has_provider_catalog_data_writer() {
+        return;
+    }
+    let token = token.trim();
+    if token.is_empty() || plan.key_id.trim().is_empty() || plan.provider_id.trim().is_empty() {
+        return;
+    }
+
+    let state = state.clone();
+    let plan = plan.clone();
+    let base_url = base_url.to_string();
+    let token = token.to_string();
+    tokio::spawn(async move {
+        if let Err(err) =
+            refresh_chatgpt_web_image_quota_after_success(&state, &plan, &base_url, &token).await
+        {
+            warn!(
+                event_name = "chatgpt_web_image_quota_refresh_after_success_failed",
+                log_type = "ops",
+                request_id = %plan.request_id,
+                candidate_id = ?plan.candidate_id,
+                provider_id = %plan.provider_id,
+                key_id = %plan.key_id,
+                error = %err,
+                "gateway failed to refresh ChatGPT-Web image quota after a successful generation"
+            );
+        }
+    });
+}
+
+async fn refresh_chatgpt_web_image_quota_after_success(
+    state: &AppState,
+    plan: &ExecutionPlan,
+    base_url: &str,
+    token: &str,
+) -> Result<bool, String> {
+    let key_id = plan.key_id.trim();
+    let provider_id = plan.provider_id.trim();
+    let key_ids = [key_id.to_string()];
+    let provider_ids = [provider_id.to_string()];
+    let key_available = state
+        .read_provider_catalog_keys_by_ids(&key_ids)
+        .await
+        .map_err(|err| err.into_message())?
+        .into_iter()
+        .any(|key| key.id == key_id && key.provider_id == provider_id);
+    if !key_available {
+        return Ok(false);
+    }
+    let Some(provider) = state
+        .read_provider_catalog_providers_by_ids(&provider_ids)
+        .await
+        .map_err(|err| err.into_message())?
+        .into_iter()
+        .find(|provider| provider.id == provider_id)
+    else {
+        return Ok(false);
+    };
+    if !provider
+        .provider_type
+        .trim()
+        .eq_ignore_ascii_case("chatgpt_web")
+    {
+        return Ok(false);
+    }
+
+    let authorization = (
+        "authorization".to_string(),
+        format!("Bearer {}", token.trim()),
+    );
+    let spec = build_chatgpt_web_pool_quota_request(key_id, base_url, authorization);
+    let quota_plan = build_chatgpt_web_image_quota_refresh_plan(plan, spec);
+    let result = DirectSyncExecutionRuntime::new()
+        .execute_sync(&quota_plan)
+        .await
+        .map_err(|err| err.to_string())?;
+    if result.status_code != 200 {
+        let body_excerpt = String::from_utf8_lossy(&execution_result_body_bytes_lossy(&result))
+            .chars()
+            .take(320)
+            .collect::<String>();
+        return Err(format!(
+            "conversation/init returned {}: {}",
+            result.status_code, body_excerpt
+        ));
+    }
+
+    let body_json = execution_result_json(&result).map_err(|err| err.to_string())?;
+    let Some(mut metadata) =
+        parse_chatgpt_web_conversation_init_response(&body_json, current_unix_secs())
+    else {
+        return Ok(false);
+    };
+
+    let Some(latest_key) = state
+        .read_provider_catalog_keys_by_ids(&key_ids)
+        .await
+        .map_err(|err| err.into_message())?
+        .into_iter()
+        .find(|key| key.id == key_id && key.provider_id == provider_id)
+    else {
+        return Ok(false);
+    };
+    normalize_chatgpt_web_image_quota_limit(&mut metadata, latest_key.upstream_metadata.as_ref());
+
+    let mut updated_key = latest_key;
+    let updated_upstream_metadata = merge_provider_metadata_object(
+        updated_key.upstream_metadata.as_ref(),
+        "chatgpt_web",
+        metadata,
+    );
+    updated_key.upstream_metadata = updated_upstream_metadata;
+    let (oauth_invalid_at_unix_secs, oauth_invalid_reason) =
+        quota_refresh_success_invalid_state(&updated_key);
+    updated_key.oauth_invalid_at_unix_secs = oauth_invalid_at_unix_secs;
+    updated_key.oauth_invalid_reason = oauth_invalid_reason;
+    updated_key.status_snapshot = sync_provider_key_quota_status_snapshot(
+        updated_key.status_snapshot.as_ref(),
+        "chatgpt_web",
+        updated_key.upstream_metadata.as_ref(),
+        "image_success",
+    );
+    updated_key.status_snapshot =
+        sync_provider_key_oauth_status_snapshot(updated_key.status_snapshot.as_ref(), &updated_key);
+    updated_key.updated_at_unix_secs = Some(current_unix_secs());
+
+    Ok(state
+        .update_provider_catalog_key_runtime_state(&updated_key)
+        .await
+        .map_err(|err| err.into_message())?
+        .is_some())
+}
+
+fn build_chatgpt_web_image_quota_refresh_plan(
+    plan: &ExecutionPlan,
+    spec: ProviderPoolQuotaRequestSpec,
+) -> ExecutionPlan {
+    let ProviderPoolQuotaRequestSpec {
+        request_id,
+        provider_name,
+        quota_kind: _,
+        method,
+        url,
+        mut headers,
+        content_type,
+        json_body,
+        client_api_format,
+        provider_api_format,
+        model_name,
+        accept_invalid_certs,
+    } = spec;
+    if accept_invalid_certs {
+        headers.insert(
+            EXECUTION_REQUEST_ACCEPT_INVALID_CERTS_HEADER.to_string(),
+            "true".to_string(),
+        );
+    }
+    let body = json_body
+        .map(RequestBody::from_json)
+        .unwrap_or(RequestBody {
+            json_body: None,
+            body_bytes_b64: None,
+            body_ref: None,
+        });
+    ExecutionPlan {
+        request_id,
+        candidate_id: plan.candidate_id.clone(),
+        provider_name: Some(provider_name),
+        provider_id: plan.provider_id.clone(),
+        endpoint_id: plan.endpoint_id.clone(),
+        key_id: plan.key_id.clone(),
+        method,
+        url,
+        headers,
+        content_type,
+        content_encoding: None,
+        body,
+        stream: false,
+        client_api_format,
+        provider_api_format,
+        model_name,
+        proxy: plan.proxy.clone(),
+        transport_profile: chatgpt_web_image_transport_profile(plan),
+        timeouts: Some(chatgpt_web_image_quota_refresh_timeouts(
+            plan.proxy.as_ref(),
+        )),
+    }
+}
+
+fn chatgpt_web_image_quota_refresh_timeouts(proxy: Option<&ProxySnapshot>) -> ExecutionTimeouts {
+    let timeout_ms = if proxy.is_some() {
+        CHATGPT_WEB_QUOTA_REFRESH_PROXY_TIMEOUT_MS
+    } else {
+        CHATGPT_WEB_QUOTA_REFRESH_TIMEOUT_MS
+    };
+    ExecutionTimeouts {
+        connect_ms: Some(timeout_ms),
+        read_ms: Some(timeout_ms),
+        write_ms: Some(timeout_ms),
+        pool_ms: Some(timeout_ms),
+        total_ms: Some(timeout_ms),
+        ..ExecutionTimeouts::default()
+    }
+}
+
+fn merge_provider_metadata_object(
+    current: Option<&Value>,
+    section_key: &str,
+    section_value: Value,
+) -> Option<Value> {
+    let mut merged = current
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    merged.insert(section_key.to_string(), section_value);
+    Some(Value::Object(merged))
 }
 
 fn chatgpt_web_image_transport_profile(plan: &ExecutionPlan) -> Option<ResolvedTransportProfile> {
@@ -2092,6 +2329,60 @@ mod tests {
                 .and_then(|value| value.get("source"))
                 .and_then(Value::as_str),
             Some("chatgpt_web_image_default")
+        );
+    }
+
+    #[test]
+    fn chatgpt_web_image_quota_refresh_plan_uses_conversation_init() {
+        let plan = sample_plan(
+            CHATGPT_WEB_DEFAULT_BASE_URL,
+            json!({"prompt": "draw a small test image"}),
+            false,
+        );
+        let spec = build_chatgpt_web_pool_quota_request(
+            &plan.key_id,
+            CHATGPT_WEB_DEFAULT_BASE_URL,
+            (
+                "authorization".to_string(),
+                "Bearer test-access-token".to_string(),
+            ),
+        );
+
+        let quota_plan = build_chatgpt_web_image_quota_refresh_plan(&plan, spec);
+
+        assert_eq!(quota_plan.method, "POST");
+        assert_eq!(
+            quota_plan.url,
+            "https://chatgpt.com/backend-api/conversation/init"
+        );
+        assert_eq!(
+            quota_plan.provider_api_format,
+            "chatgpt_web:conversation_init"
+        );
+        assert_eq!(
+            quota_plan.headers.get("authorization").map(String::as_str),
+            Some("Bearer test-access-token")
+        );
+        assert_eq!(
+            quota_plan
+                .headers
+                .get(EXECUTION_REQUEST_ACCEPT_INVALID_CERTS_HEADER)
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            quota_plan
+                .transport_profile
+                .as_ref()
+                .map(|profile| profile.backend.as_str()),
+            Some(TRANSPORT_BACKEND_BROWSER_WREQ)
+        );
+        assert_eq!(
+            quota_plan
+                .timeouts
+                .as_ref()
+                .and_then(|timeouts| timeouts.total_ms),
+            Some(CHATGPT_WEB_QUOTA_REFRESH_TIMEOUT_MS)
         );
     }
 
