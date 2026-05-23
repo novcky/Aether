@@ -262,4 +262,13 @@ describe('UsageRecordsTable', () => {
     expect(root.textContent).toContain('0.50s / 1.00s')
     expect(root.textContent).toContain('gpt-5')
   })
+
+  it('offers embedding API formats in the usage record filter', () => {
+    const root = mountUsageRecordsTable([buildRecord({ api_format: 'openai:chat' })])
+
+    expect(root.textContent).toContain('OpenAI Embedding')
+    expect(root.textContent).toContain('Gemini Embedding')
+    expect(root.textContent).toContain('Jina Embedding')
+    expect(root.textContent).toContain('Doubao Embedding')
+  })
 })

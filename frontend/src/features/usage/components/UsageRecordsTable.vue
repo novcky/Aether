@@ -888,7 +888,7 @@ import {
   resolveUsageStreamLabelSegments
 } from '../utils/status'
 import { useRowClick } from '@/composables/useRowClick'
-import { formatApiFormat } from '@/api/endpoints/types/api-format'
+import { API_FORMAT_ORDER, formatApiFormat } from '@/api/endpoints/types/api-format'
 import type { DateRangeParams, UsageRecord } from '../types'
 import { MultiSelect, TimeRangePicker } from '@/components/common'
 import type { MultiSelectOption } from '@/components/common/MultiSelect.vue'
@@ -1013,20 +1013,11 @@ const emit = defineEmits<{
   'prefetchDetail': [id: string]
 }>()
 
-// 静态常量（放在 defineProps/defineEmits 之后）
-const AVAILABLE_API_FORMATS = [
-  { value: 'openai:chat', label: 'OpenAI Chat' },
-  { value: 'openai:responses', label: 'OpenAI Responses' },
-  { value: 'openai:responses:compact', label: 'OpenAI Responses Compact' },
-  { value: 'openai:video', label: 'OpenAI Video' },
-  { value: 'claude:messages', label: 'Claude Messages' },
-  { value: 'gemini:generate_content', label: 'Gemini Generate Content' },
-  { value: 'gemini:video', label: 'Gemini Video' },
-  { value: 'gemini:files', label: 'Gemini Files' },
-] as const
-
-// 使用模块级常量
-const availableApiFormats = AVAILABLE_API_FORMATS
+// 使用统一 API 格式枚举，避免使用记录筛选项和系统格式列表漂移。
+const availableApiFormats = API_FORMAT_ORDER.map((value) => ({
+  value,
+  label: formatApiFormat(value),
+}))
 
 const adminVisibleColumnIds = useLocalStorage<UsageRecordColumnId[]>(
   'usage-records-visible-columns-admin',
