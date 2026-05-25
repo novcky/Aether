@@ -639,7 +639,9 @@ pub(super) async fn handle_admin_provider_oauth_import_refresh_token(
 
 #[cfg(test)]
 mod tests {
-    use super::{import_payload_string_any, import_payload_u64_any, sanitize_windsurf_import_error};
+    use super::{
+        import_payload_string_any, import_payload_u64_any, sanitize_windsurf_import_error,
+    };
     use aether_oauth::core::OAuthError;
     use serde_json::json;
 
