@@ -3,6 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use aether_data_contracts::repository::provider_catalog::{
     StoredProviderCatalogEndpoint, StoredProviderCatalogKey,
 };
+use aether_provider_transport::url::{
+    build_bigmodel_coding_models_url, build_openai_compatible_models_url,
+    openai_compatible_base_includes_unversioned_api_root,
+};
 use regex::Regex;
 use serde_json::{json, Value};
 
@@ -600,24 +604,17 @@ pub fn aggregate_models_for_cache(models: &[Value]) -> Vec<Value> {
 }
 
 fn build_v1_models_url(base_url: &str) -> Option<String> {
-    let (trimmed_base_url, query) = split_url_query(base_url);
-    let trimmed_base_url = trimmed_base_url.trim_end_matches('/');
-    if trimmed_base_url.is_empty() {
-        return None;
-    }
-    let mut url = if trimmed_base_url.ends_with("/v1") {
-        format!("{trimmed_base_url}/models")
-    } else {
-        format!("{trimmed_base_url}/v1/models")
-    };
-    if let Some(query) = query.filter(|value| !value.trim().is_empty()) {
-        url.push('?');
-        url.push_str(query);
-    }
-    Some(url)
+    build_openai_compatible_models_url(base_url)
 }
 
 fn build_codex_models_url(base_url: &str) -> Option<String> {
+    if let Some(url) = build_bigmodel_coding_models_url(base_url) {
+        return Some(url);
+    }
+    if openai_compatible_base_includes_unversioned_api_root(base_url) {
+        return build_openai_compatible_models_url(base_url);
+    }
+
     let (trimmed_base_url, query) = split_url_query(base_url);
     let trimmed_base_url = trimmed_base_url.trim_end_matches('/');
     if trimmed_base_url.is_empty() {
@@ -960,6 +957,50 @@ mod tests {
             Some((
                 "https://chatgpt.com/backend-api/codex/models?client_version=0.128.0-alpha.1"
                     .to_string(),
+                "openai:responses".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn build_models_fetch_url_supports_bigmodel_coding_paas_root() {
+        assert_eq!(
+            build_models_fetch_url(
+                "openai",
+                "openai:chat",
+                "https://open.bigmodel.cn/api/coding/paas/v4"
+            ),
+            Some((
+                "https://open.bigmodel.cn/api/coding/paas/v4/models/models".to_string(),
+                "openai:chat".to_string()
+            ))
+        );
+        assert_eq!(
+            build_models_fetch_url(
+                "codex",
+                "openai:responses",
+                "https://open.bigmodel.cn/api/coding/paas/v4"
+            ),
+            Some((
+                "https://open.bigmodel.cn/api/coding/paas/v4/models/models".to_string(),
+                "openai:responses".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn build_models_fetch_url_preserves_unversioned_api_root() {
+        assert_eq!(
+            build_models_fetch_url("openai", "openai:chat", "https://proxy.example.com/api"),
+            Some((
+                "https://proxy.example.com/api/models".to_string(),
+                "openai:chat".to_string()
+            ))
+        );
+        assert_eq!(
+            build_models_fetch_url("codex", "openai:responses", "https://proxy.example.com/api"),
+            Some((
+                "https://proxy.example.com/api/models".to_string(),
                 "openai:responses".to_string()
             ))
         );

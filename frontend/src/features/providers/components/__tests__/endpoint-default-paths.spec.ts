@@ -3,9 +3,11 @@ import { describe, expect, it } from 'vitest'
 import { getDefaultEndpointPath } from '../endpoint-default-paths'
 
 const apiFormats = [
+  { value: 'openai:chat', default_path: '/v1/chat/completions' },
   { value: 'gemini:generate_content', default_path: '/v1beta/models/{model}:{action}' },
   { value: 'gemini:embedding', default_path: '/v1beta/models/{model}:{action}' },
   { value: 'openai:responses', default_path: '/v1/responses' },
+  { value: 'openai:embedding', default_path: '/v1/embeddings' },
 ]
 
 describe('endpoint default paths', () => {
@@ -43,5 +45,21 @@ describe('endpoint default paths', () => {
       providerType: 'codex',
       apiFormats,
     })).toBe('/responses')
+  })
+
+  it('drops /v1 from OpenAI-compatible defaults when base URL ends with /api', () => {
+    expect(getDefaultEndpointPath({
+      apiFormat: 'openai:chat',
+      providerType: 'custom',
+      baseUrl: 'https://proxy.example.com/api',
+      apiFormats,
+    })).toBe('/chat/completions')
+
+    expect(getDefaultEndpointPath({
+      apiFormat: 'openai:embedding',
+      providerType: 'custom',
+      baseUrl: 'https://proxy.example.com/api?tenant=demo',
+      apiFormats,
+    })).toBe('/embeddings')
   })
 })

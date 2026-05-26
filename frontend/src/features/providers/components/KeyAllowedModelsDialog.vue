@@ -212,7 +212,7 @@ const emit = defineEmits<{
   saved: []
 }>()
 
-const { success, error: showError } = useToast()
+const { success, error: showError, warning: showWarning } = useToast()
 const { fetchModels: fetchCachedModels } = useUpstreamModelsCache()
 
 const isOpen = computed(() => props.open)
@@ -297,7 +297,7 @@ async function fetchUpstreamModels() {
       hasQueried.value = true
       // 如果有部分失败，显示警告提示
       if (result.error) {
-        showError(`部分格式获取失败: ${result.error}`, '警告')
+        showWarning(result.error, '部分格式获取失败')
       }
     } else if (result.error) {
       errorMessage.value = result.error

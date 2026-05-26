@@ -153,7 +153,7 @@
                     <Label class="text-xs text-muted-foreground">自定义路径</Label>
                     <Input
                       :model-value="getDisplayedPath(endpoint)"
-                      :placeholder="getDefaultPath(endpoint.api_format, endpoint.base_url) || '留空使用默认'"
+                      :placeholder="getDefaultPath(endpoint.api_format, getEndpointEditState(endpoint.id)?.url ?? endpoint.base_url) || '留空使用默认'"
                       :disabled="isFixedProvider"
                       @update:model-value="(v) => updateEndpointField(endpoint.id, 'path', v)"
                     />

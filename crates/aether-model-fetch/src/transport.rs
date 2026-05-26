@@ -808,6 +808,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn builds_bigmodel_coding_models_fetch_plan() {
+        let runtime = TestRuntime {
+            oauth_auth: None,
+            proxy: None,
+        };
+        let mut transport = sample_transport("openai", "openai:chat", "api_key");
+        transport.endpoint.base_url = "https://open.bigmodel.cn/api/coding/paas/v4".to_string();
+        transport.key.decrypted_auth_config = None;
+        let plan = build_models_fetch_execution_plan(&runtime, &transport)
+            .await
+            .expect("plan");
+
+        assert_eq!(
+            plan.url,
+            "https://open.bigmodel.cn/api/coding/paas/v4/models/models"
+        );
+        assert_eq!(
+            plan.headers.get("authorization").map(String::as_str),
+            Some("Bearer secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn builds_unversioned_api_root_models_fetch_plan() {
+        let runtime = TestRuntime {
+            oauth_auth: None,
+            proxy: None,
+        };
+        let mut transport = sample_transport("openai", "openai:chat", "api_key");
+        transport.endpoint.base_url = "https://proxy.example.com/api".to_string();
+        transport.key.decrypted_auth_config = None;
+        let plan = build_models_fetch_execution_plan(&runtime, &transport)
+            .await
+            .expect("plan");
+
+        assert_eq!(plan.url, "https://proxy.example.com/api/models");
+        assert_eq!(
+            plan.headers.get("authorization").map(String::as_str),
+            Some("Bearer secret")
+        );
+    }
+
+    #[tokio::test]
     async fn builds_codex_models_fetch_plan_with_account_header() {
         let runtime = TestRuntime {
             oauth_auth: Some(

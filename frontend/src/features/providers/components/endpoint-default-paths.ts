@@ -15,6 +15,25 @@ function isCodexUrl(baseUrl: string): boolean {
   return url.includes('/backend-api/codex') || url.endsWith('/codex')
 }
 
+function baseUrlEndsWithApiRoot(baseUrl?: string | null): boolean {
+  const raw = (baseUrl || '').trim()
+  if (!raw) return false
+  try {
+    const parsed = new URL(raw)
+    return parsed.pathname.replace(/\/+$/, '').toLowerCase().endsWith('/api')
+  } catch {
+    return raw.split('?')[0].replace(/\/+$/, '').toLowerCase().endsWith('/api')
+  }
+}
+
+function stripV1PrefixForApiRoot(path: string): string {
+  return path.replace(/^\/v1(?=\/)/i, '')
+}
+
+function isOpenAiCompatibleFormat(apiFormat: string): boolean {
+  return apiFormat.startsWith('openai:') || apiFormat.startsWith('jina:')
+}
+
 export function getDefaultEndpointPath(params: {
   apiFormat: string
   providerType?: string | null
@@ -42,6 +61,9 @@ export function getDefaultEndpointPath(params: {
     : (!!params.baseUrl && isCodexUrl(params.baseUrl))
   if (normalizedApiFormat === 'openai:responses' && isCodex) {
     return '/responses'
+  }
+  if (baseUrlEndsWithApiRoot(params.baseUrl) && isOpenAiCompatibleFormat(normalizedApiFormat)) {
+    return stripV1PrefixForApiRoot(defaultPath)
   }
   return defaultPath
 }
