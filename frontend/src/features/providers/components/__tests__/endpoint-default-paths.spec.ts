@@ -8,6 +8,7 @@ const apiFormats = [
   { value: 'gemini:embedding', default_path: '/v1beta/models/{model}:{action}' },
   { value: 'openai:responses', default_path: '/v1/responses' },
   { value: 'openai:embedding', default_path: '/v1/embeddings' },
+  { value: 'claude:messages', default_path: '/v1/messages' },
 ]
 
 describe('endpoint default paths', () => {
@@ -47,7 +48,7 @@ describe('endpoint default paths', () => {
     })).toBe('/responses')
   })
 
-  it('drops /v1 from OpenAI-compatible defaults when base URL ends with /api', () => {
+  it('drops /v1 from OpenAI-compatible defaults when base URL includes a path', () => {
     expect(getDefaultEndpointPath({
       apiFormat: 'openai:chat',
       providerType: 'custom',
@@ -61,5 +62,58 @@ describe('endpoint default paths', () => {
       baseUrl: 'https://proxy.example.com/api?tenant=demo',
       apiFormats,
     })).toBe('/embeddings')
+
+    expect(getDefaultEndpointPath({
+      apiFormat: 'openai:chat',
+      providerType: 'custom',
+      baseUrl: 'https://proxy.example.com/openai',
+      apiFormats,
+    })).toBe('/chat/completions')
+
+    expect(getDefaultEndpointPath({
+      apiFormat: 'openai:chat',
+      providerType: 'custom',
+      baseUrl: 'https://proxy.example.com',
+      apiFormats,
+    })).toBe('/v1/chat/completions')
+  })
+
+  it('drops /v1 from OpenAI-compatible defaults when base URL already includes a known API root', () => {
+    expect(getDefaultEndpointPath({
+      apiFormat: 'openai:chat',
+      providerType: 'custom',
+      baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
+      apiFormats,
+    })).toBe('/chat/completions')
+
+    expect(getDefaultEndpointPath({
+      apiFormat: 'openai:responses',
+      providerType: 'custom',
+      baseUrl: 'https://api.openai.example/v1',
+      apiFormats,
+    })).toBe('/responses')
+  })
+
+  it('drops /v1 from Claude Messages defaults for v1 and unversioned api roots', () => {
+    expect(getDefaultEndpointPath({
+      apiFormat: 'claude:messages',
+      providerType: 'custom',
+      baseUrl: 'https://api.anthropic.example/v1',
+      apiFormats,
+    })).toBe('/messages')
+
+    expect(getDefaultEndpointPath({
+      apiFormat: 'claude:messages',
+      providerType: 'custom',
+      baseUrl: 'https://proxy.example.com/api',
+      apiFormats,
+    })).toBe('/messages')
+
+    expect(getDefaultEndpointPath({
+      apiFormat: 'claude:messages',
+      providerType: 'custom',
+      baseUrl: 'https://proxy.example.com/anthropic',
+      apiFormats,
+    })).toBe('/messages')
   })
 })

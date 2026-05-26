@@ -1199,7 +1199,7 @@ mod tests {
                 },
             )
             .as_deref(),
-            Some("https://api.openai.example/root/v1/embeddings?tenant=request&trace=1")
+            Some("https://api.openai.example/root/embeddings?tenant=request&trace=1")
         );
         assert_eq!(
             build_transport_request_url(

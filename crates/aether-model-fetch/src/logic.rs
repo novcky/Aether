@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use aether_data_contracts::repository::provider_catalog::{
     StoredProviderCatalogEndpoint, StoredProviderCatalogKey,
 };
+use aether_provider_transport::provider_types::is_codex_cli_backend_url;
 use aether_provider_transport::url::{
     build_bigmodel_coding_models_url, build_openai_compatible_models_url,
     openai_compatible_base_includes_unversioned_api_root,
@@ -611,14 +612,17 @@ fn build_codex_models_url(base_url: &str) -> Option<String> {
     if let Some(url) = build_bigmodel_coding_models_url(base_url) {
         return Some(url);
     }
-    if openai_compatible_base_includes_unversioned_api_root(base_url) {
-        return build_openai_compatible_models_url(base_url);
-    }
 
     let (trimmed_base_url, query) = split_url_query(base_url);
     let trimmed_base_url = trimmed_base_url.trim_end_matches('/');
     if trimmed_base_url.is_empty() {
         return None;
+    }
+    let is_codex_backend = is_codex_cli_backend_url(trimmed_base_url)
+        || trimmed_base_url.ends_with("/codex")
+        || trimmed_base_url.ends_with("/models");
+    if !is_codex_backend && openai_compatible_base_includes_unversioned_api_root(base_url) {
+        return build_openai_compatible_models_url(base_url);
     }
     let mut url = if trimmed_base_url.ends_with("/models") {
         trimmed_base_url.to_string()
@@ -971,7 +975,7 @@ mod tests {
                 "https://open.bigmodel.cn/api/coding/paas/v4"
             ),
             Some((
-                "https://open.bigmodel.cn/api/coding/paas/v4/models/models".to_string(),
+                "https://open.bigmodel.cn/api/coding/paas/v4/models".to_string(),
                 "openai:chat".to_string()
             ))
         );
@@ -982,7 +986,7 @@ mod tests {
                 "https://open.bigmodel.cn/api/coding/paas/v4"
             ),
             Some((
-                "https://open.bigmodel.cn/api/coding/paas/v4/models/models".to_string(),
+                "https://open.bigmodel.cn/api/coding/paas/v4/models".to_string(),
                 "openai:responses".to_string()
             ))
         );
@@ -998,10 +1002,35 @@ mod tests {
             ))
         );
         assert_eq!(
+            build_models_fetch_url("openai", "openai:chat", "https://proxy.example.com/openai"),
+            Some((
+                "https://proxy.example.com/openai/models".to_string(),
+                "openai:chat".to_string()
+            ))
+        );
+        assert_eq!(
+            build_models_fetch_url("openai", "openai:chat", "https://proxy.example.com"),
+            Some((
+                "https://proxy.example.com/v1/models".to_string(),
+                "openai:chat".to_string()
+            ))
+        );
+        assert_eq!(
             build_models_fetch_url("codex", "openai:responses", "https://proxy.example.com/api"),
             Some((
                 "https://proxy.example.com/api/models".to_string(),
                 "openai:responses".to_string()
+            ))
+        );
+        assert_eq!(
+            build_models_fetch_url(
+                "anthropic",
+                "claude:messages",
+                "https://proxy.example.com/api"
+            ),
+            Some((
+                "https://proxy.example.com/api/models".to_string(),
+                "claude:messages".to_string()
             ))
         );
     }

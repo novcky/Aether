@@ -80,7 +80,7 @@ fn openai_image_base_includes_operation_path(base_url: &str) -> bool {
 pub fn build_claude_messages_url(upstream_base_url: &str, query: Option<&str>) -> String {
     let (trimmed, base_query) = split_base_url_query(upstream_base_url);
     let trimmed = trimmed.trim_end_matches('/');
-    let mut url = if trimmed.ends_with("/v1") {
+    let mut url = if v1_compatible_base_includes_api_root(trimmed) {
         format!("{trimmed}/messages")
     } else {
         format!("{trimmed}/v1/messages")
@@ -210,12 +210,10 @@ pub fn build_bigmodel_coding_models_url(upstream_base_url: &str) -> Option<Strin
         .ok()
         .map(|url| url.path().trim_end_matches('/').to_string())
         .unwrap_or_else(|| trimmed_base_url.trim_end_matches('/').to_string());
-    let mut url = if path.ends_with("/models/models") {
+    let mut url = if path.ends_with("/models") {
         trimmed_base_url.to_string()
-    } else if path.ends_with("/models") {
-        format!("{trimmed_base_url}/models")
     } else {
-        format!("{trimmed_base_url}/models/models")
+        format!("{trimmed_base_url}/models")
     };
     append_merged_query(&mut url, base_query, None, None, &[]);
     Some(url)
@@ -303,13 +301,25 @@ pub fn openai_compatible_base_includes_api_root(base_url: &str) -> bool {
         || openai_compatible_base_includes_unversioned_api_root(trimmed)
 }
 
+pub fn v1_compatible_base_includes_api_root(base_url: &str) -> bool {
+    let trimmed = base_url.trim().trim_end_matches('/');
+    trimmed.ends_with("/v1") || openai_compatible_base_includes_unversioned_api_root(trimmed)
+}
+
 pub fn openai_compatible_base_includes_unversioned_api_root(base_url: &str) -> bool {
     let trimmed = base_url.trim().trim_end_matches('/');
     let path = Url::parse(trimmed)
         .ok()
         .map(|url| url.path().trim_end_matches('/').to_ascii_lowercase())
-        .unwrap_or_else(|| trimmed.to_ascii_lowercase());
-    path.ends_with("/api")
+        .unwrap_or_else(|| {
+            trimmed
+                .split_once('/')
+                .map(|(_, path)| format!("/{path}"))
+                .unwrap_or_default()
+                .trim_end_matches('/')
+                .to_ascii_lowercase()
+        });
+    !path.is_empty()
 }
 
 fn bigmodel_coding_base_includes_api_root(base_url: &str) -> bool {
@@ -334,7 +344,7 @@ fn bigmodel_coding_models_base_is_supported(base_url: &str) -> bool {
     }
     matches!(
         parsed.path().trim_end_matches('/'),
-        "/api/coding/paas/v4" | "/api/coding/paas/v4/models" | "/api/coding/paas/v4/models/models"
+        "/api/coding/paas/v4" | "/api/coding/paas/v4/models"
     )
 }
 
@@ -427,7 +437,7 @@ fn merge_query_string(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_bigmodel_coding_models_url, build_gemini_content_url,
+        build_bigmodel_coding_models_url, build_claude_messages_url, build_gemini_content_url,
         build_gemini_files_passthrough_url, build_gemini_video_predict_long_running_url,
         build_openai_chat_url, build_openai_compatible_models_url, build_openai_image_url,
         build_openai_responses_url, build_passthrough_path_url,
@@ -485,6 +495,14 @@ mod tests {
             "https://proxy.example.com/api/chat/completions?trace=1"
         );
         assert_eq!(
+            build_openai_chat_url("https://proxy.example.com/openai", None),
+            "https://proxy.example.com/openai/chat/completions"
+        );
+        assert_eq!(
+            build_openai_chat_url("https://proxy.example.com", None),
+            "https://proxy.example.com/v1/chat/completions"
+        );
+        assert_eq!(
             build_openai_responses_url("https://proxy.example.com/api", None, false),
             "https://proxy.example.com/api/responses"
         );
@@ -499,25 +517,38 @@ mod tests {
     }
 
     #[test]
-    fn bigmodel_coding_models_url_uses_double_models_resource() {
+    fn claude_messages_url_preserves_v1_and_unversioned_api_roots() {
+        assert_eq!(
+            build_claude_messages_url("https://api.anthropic.example/v1", Some("trace=1")),
+            "https://api.anthropic.example/v1/messages?trace=1"
+        );
+        assert_eq!(
+            build_claude_messages_url("https://proxy.example.com/api", None),
+            "https://proxy.example.com/api/messages"
+        );
+        assert_eq!(
+            build_claude_messages_url("https://proxy.example.com/anthropic", None),
+            "https://proxy.example.com/anthropic/messages"
+        );
+        assert_eq!(
+            build_claude_messages_url("https://api.anthropic.example", None),
+            "https://api.anthropic.example/v1/messages"
+        );
+    }
+
+    #[test]
+    fn bigmodel_coding_models_url_uses_models_resource() {
         assert_eq!(
             build_bigmodel_coding_models_url(
                 "https://open.bigmodel.cn/api/coding/paas/v4?tenant=demo"
             )
             .as_deref(),
-            Some("https://open.bigmodel.cn/api/coding/paas/v4/models/models?tenant=demo")
+            Some("https://open.bigmodel.cn/api/coding/paas/v4/models?tenant=demo")
         );
         assert_eq!(
             build_bigmodel_coding_models_url("https://open.bigmodel.cn/api/coding/paas/v4/models")
                 .as_deref(),
-            Some("https://open.bigmodel.cn/api/coding/paas/v4/models/models")
-        );
-        assert_eq!(
-            build_bigmodel_coding_models_url(
-                "https://open.bigmodel.cn/api/coding/paas/v4/models/models"
-            )
-            .as_deref(),
-            Some("https://open.bigmodel.cn/api/coding/paas/v4/models/models")
+            Some("https://open.bigmodel.cn/api/coding/paas/v4/models")
         );
     }
 
@@ -527,6 +558,14 @@ mod tests {
             build_openai_compatible_models_url("https://proxy.example.com/api?tenant=demo")
                 .as_deref(),
             Some("https://proxy.example.com/api/models?tenant=demo")
+        );
+        assert_eq!(
+            build_openai_compatible_models_url("https://proxy.example.com/openai").as_deref(),
+            Some("https://proxy.example.com/openai/models")
+        );
+        assert_eq!(
+            build_openai_compatible_models_url("https://proxy.example.com").as_deref(),
+            Some("https://proxy.example.com/v1/models")
         );
     }
 

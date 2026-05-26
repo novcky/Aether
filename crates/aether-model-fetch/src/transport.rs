@@ -822,7 +822,7 @@ mod tests {
 
         assert_eq!(
             plan.url,
-            "https://open.bigmodel.cn/api/coding/paas/v4/models/models"
+            "https://open.bigmodel.cn/api/coding/paas/v4/models"
         );
         assert_eq!(
             plan.headers.get("authorization").map(String::as_str),
