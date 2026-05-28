@@ -16,6 +16,4 @@ pub use plan::{
     TRANSPORT_HTTP_MODE_HTTP1_ONLY, TRANSPORT_POOL_SCOPE_KEY,
 };
 pub use result::{ExecutionResult, ExecutionTelemetry, ResponseBody};
-pub use usage::{
-    ExecutionStreamTerminalSummary, StandardizedUsage, USAGE_SERVER_NOW_UNIX_MS_HEADER,
-};
+pub use usage::{ExecutionStreamTerminalSummary, StandardizedUsage};
